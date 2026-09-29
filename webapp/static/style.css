@@ -29,7 +29,6 @@
 
   --on-c: #ffffff;      /* text on a solid --c fill */
   --tint: 12%;          /* strength of soft backgrounds */
-  --header-grad: linear-gradient(100deg, #4f46e5 0%, #7c3aed 35%, #db2777 70%, #ea580c 100%);
   --shadow: 0 1px 2px rgba(15, 23, 42, .05), 0 4px 14px rgba(15, 23, 42, .06);
   --radius: 12px;
   --mono: ui-monospace, "Cascadia Code", Consolas, monospace;
@@ -57,7 +56,6 @@
 
   --on-c: #0b1020;
   --tint: 18%;
-  --header-grad: linear-gradient(100deg, #3730a3 0%, #5b21b6 35%, #9d174d 70%, #9a3412 100%);
   --shadow: 0 1px 2px rgba(0, 0, 0, .4), 0 4px 14px rgba(0, 0, 0, .25);
   color-scheme: dark;
 }
@@ -73,15 +71,14 @@ h2 { font-size: 15px; margin: 0; }
 [hidden] { display: none !important; }
 
 /* ------------------------------------------------------------------ header -- */
-.topbar { position: sticky; top: 0; z-index: 10; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 20px; background: var(--header-grad); color: #fff; box-shadow: 0 2px 12px rgba(79, 70, 229, .25); }
+.topbar { position: sticky; top: 0; z-index: 10; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 20px; background: var(--surface); color: var(--text); border-bottom: 1px solid var(--border); box-shadow: 0 1px 3px rgba(15, 23, 42, .05); }
 .brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 16px; letter-spacing: .01em; }
-.brand svg { color: #fff; background: rgba(255, 255, 255, .18); border-radius: 8px; padding: 4px; width: 30px; height: 30px; }
+.brand svg { color: var(--on-c); background: var(--indigo); border-radius: 8px; padding: 5px; width: 30px; height: 30px; }
 .topbar-right { display: flex; align-items: center; gap: 10px; }
-.history { display: flex; gap: 6px; align-items: center; color: rgba(255, 255, 255, .85); font-size: 12px; }
-.history select { max-width: 280px; background: rgba(255, 255, 255, .15); color: #fff; border-color: rgba(255, 255, 255, .35); }
-.history select option { color: #0f172a; background: #fff; }
-.theme-toggle { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; border: 1px solid rgba(255, 255, 255, .4); background: rgba(255, 255, 255, .15); color: #fff; cursor: pointer; }
-.theme-toggle:hover { background: rgba(255, 255, 255, .28); }
+.history { display: flex; gap: 6px; align-items: center; color: var(--muted); font-size: 12px; }
+.history select { max-width: 280px; }
+.theme-toggle { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--border); background: var(--surface-2); color: var(--indigo); cursor: pointer; }
+.theme-toggle:hover { background: color-mix(in srgb, var(--indigo) var(--tint), var(--surface)); }
 .theme-toggle .i-sun { display: none; }
 :root[data-theme="dark"] .theme-toggle .i-sun { display: block; }
 :root[data-theme="dark"] .theme-toggle .i-moon { display: none; }
@@ -121,13 +118,13 @@ textarea:focus, select:focus, input:focus { outline: 2px solid var(--accent); ou
 .chip-all:hover { background: linear-gradient(135deg, var(--indigo), var(--pink)); filter: brightness(1.1); }
 .model { margin-left: auto; display: flex; gap: 6px; align-items: center; font-size: 12px; color: var(--muted); }
 
-.pill { font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 999px; background: rgba(255, 255, 255, .92); }
-.pill-idle { color: #475569; }
-.pill-running, .pill-starting { color: #1d4ed8; }
+.pill { --c: var(--slate); font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 999px; color: var(--c); background: color-mix(in srgb, var(--c) var(--tint), var(--surface)); border: 1px solid color-mix(in srgb, var(--c) 35%, var(--border)); }
+.pill-idle { --c: var(--slate); }
+.pill-running, .pill-starting { --c: var(--blue); }
 .pill-running::before, .pill-starting::before { content: "● "; animation: pulse 1.2s ease-in-out infinite; }
-.pill-completed { color: #15803d; }
-.pill-failed, .pill-interrupted { color: #b91c1c; }
-.pill-stopped { color: #b45309; }
+.pill-completed { --c: var(--green); }
+.pill-failed, .pill-interrupted { --c: var(--red); }
+.pill-stopped { --c: var(--amber); }
 
 /* ---------------------------------------------------------------- pipeline -- */
 .pipeline { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 10px; }
