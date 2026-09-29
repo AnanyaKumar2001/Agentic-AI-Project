@@ -1,0 +1,49 @@
+# ---------------------------------------------------------------------------
+# Evidence and derived data — NEVER commit.
+# CDR/IPDR records and everything generated from them contain personal data
+# (phone numbers, IMEI/IMSI, IPs, locations). Only generic code is tracked.
+# ---------------------------------------------------------------------------
+
+# Raw operator exports (anywhere in the repo)
+*.xls
+*.xlsx
+*.xlsm
+*.csv
+
+# Case-specific folders: data, outputs, and scripts/report definitions that
+# hard-code this case's numbers, IMEIs and file names. Excluded entirely.
+normalized/
+analysis/
+visuals/
+
+# Power BI: keep only the generic theme and DAX measures
+powerbi/*
+!powerbi/.gitignore
+!powerbi/theme.json
+!powerbi/measures.dax
+*.pbix
+
+# Web console run logs (contain prompts, agent reports and findings)
+webapp/runs/
+
+
+# ---------------------------------------------------------------------------
+# Python / tooling
+# ---------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+.env
+*.log
+
+# Claude Code: keep shared agents/settings, ignore personal overrides
+.claude/settings.local.json
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/

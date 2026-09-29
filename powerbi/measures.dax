@@ -1,0 +1,180 @@
+// DAX measures for the CDR / IPDR model (fallback / reference copy).
+// Usage: create an empty table named _Measures (Home > Enter data > Load), open
+// DAX query view, paste this file, Run, then click 'Update model with changes'.
+// Or create each measure manually: New measure, then  Name = <expression>.
+// Format string and display folder are given in the comment above each measure.
+
+DEFINE
+    // Number of CDR records (calls + SMS).  [formatString: #,0 | displayFolder: CDR]
+    MEASURE _Measures[Total Events] = COUNTROWS ( FactCalls )
+
+    // Voice call events (MO_CALL + MT_CALL).  [formatString: #,0 | displayFolder: CDR]
+    MEASURE _Measures[Total Calls] = CALCULATE ( COUNTROWS ( FactCalls ), FactCalls[event_category] = "Call" )
+
+    // SMS events (MO_SMS + MT_SMS).  [formatString: #,0 | displayFolder: CDR]
+    MEASURE _Measures[Total SMS] = CALCULATE ( COUNTROWS ( FactCalls ), FactCalls[event_category] = "SMS" )
+
+    // Sum of voice-call durations in seconds.  [formatString: #,0 | displayFolder: CDR]
+    MEASURE _Measures[Total Call Duration (s)] = CALCULATE ( SUM ( FactCalls[duration_s] ), FactCalls[event_category] = "Call" )
+
+    // Sum of voice-call durations in minutes.  [formatString: #,0.0 | displayFolder: CDR]
+    MEASURE _Measures[Talk Time (min)] = DIVIDE ( [Total Call Duration (s)], 60 )
+
+    // Average duration of voice calls in seconds.  [formatString: #,0.0 | displayFolder: CDR]
+    MEASURE _Measures[Avg Call Duration (s)] = CALCULATE ( AVERAGE ( FactCalls[duration_s] ), FactCalls[event_category] = "Call" )
+
+    // Distinct counterparties in the CDR (includes SMS sender IDs).  [formatString: #,0 | displayFolder: CDR]
+    MEASURE _Measures[Distinct Contacts] = DISTINCTCOUNT ( FactCalls[other_msisdn] )
+
+    // MO_CALL + MO_SMS.  [formatString: #,0 | displayFolder: CDR]
+    MEASURE _Measures[Outgoing Events] = CALCULATE ( COUNTROWS ( FactCalls ), FactCalls[direction] = "Outgoing" )
+
+    // MT_CALL + MT_SMS.  [formatString: #,0 | displayFolder: CDR]
+    MEASURE _Measures[Incoming Events] = CALCULATE ( COUNTROWS ( FactCalls ), FactCalls[direction] = "Incoming" )
+
+    // Share of CDR events originated by the target.  [formatString: 0.0% | displayFolder: CDR]
+    MEASURE _Measures[Outgoing %] = DIVIDE ( [Outgoing Events], [Total Events] )
+
+    // CDR events starting between 00:00 and 04:59.  [formatString: #,0 | displayFolder: CDR]
+    MEASURE _Measures[Late-Night Events] = CALCULATE ( COUNTROWS ( FactCalls ), FactCalls[hour] < 5 )
+
+    // Days with at least one CDR event.  [formatString: #,0 | displayFolder: CDR]
+    MEASURE _Measures[Active Days] = DISTINCTCOUNT ( FactCalls[date] )
+
+    // Distinct first or last cell IDs used by the CDR events in context.  [formatString: #,0 | displayFolder: Location]
+    MEASURE _Measures[Distinct Cells] =
+        VAR cells =
+            DISTINCT (
+                UNION (
+                    SELECTCOLUMNS ( FactCalls, "cell", FactCalls[first_cell_id] ),
+                    SELECTCOLUMNS ( FactCalls, "cell", FactCalls[last_cell_id] )
+                )
+            )
+        RETURN
+            COUNTROWS ( FILTER ( cells, NOT ISBLANK ( [cell] ) ) )
+
+    // Distinct tower sites (position cell's site name).  [formatString: #,0 | displayFolder: Location]
+    MEASURE _Measures[Distinct Sites] = DISTINCTCOUNT ( FactCalls[position_site] )
+
+    // Events whose position cell differs from the previous event's.  [formatString: #,0 | displayFolder: Location]
+    MEASURE _Measures[Cell Changes] = CALCULATE ( COUNTROWS ( FactCalls ), FactCalls[cell_changed_from_prev] = TRUE () )
+
+    // Events whose LAST cell is the cell in context (inactive relationship).  [formatString: #,0 | displayFolder: Location]
+    MEASURE _Measures[Events (Last Cell)] = CALCULATE ( [Total Events], USERELATIONSHIP ( FactCalls[last_cell_id], DimCell[cell_id] ) )
+
+    // Latitude of cells with CDR events (blank otherwise) - used by the scatter-map fallback.  [formatString: 0.00000 | displayFolder: Location]
+    MEASURE _Measures[Cell Latitude] = IF ( [Total Events] > 0, AVERAGE ( DimCell[latitude] ) )
+
+    // Longitude of cells with CDR events (blank otherwise) - used by the scatter-map fallback.  [formatString: 0.00000 | displayFolder: Location]
+    MEASURE _Measures[Cell Longitude] = IF ( [Total Events] > 0, AVERAGE ( DimCell[longitude] ) )
+
+    // Distinct handsets (IMEI) in the CDR.  [formatString: #,0 | displayFolder: Devices]
+    MEASURE _Measures[Distinct IMEIs] = DISTINCTCOUNT ( FactCalls[imei] )
+
+    // Distinct SIMs (IMSI) in the CDR.  [formatString: #,0 | displayFolder: Devices]
+    MEASURE _Measures[Distinct IMSIs] = DISTINCTCOUNT ( FactCalls[imsi] )
+
+    // Events whose IMEI differs from the chronologically previous CDR event (computed over the full CDR).  [formatString: #,0 | displayFolder: Devices]
+    MEASURE _Measures[IMEI Changes] = SUM ( FactCalls[imei_changed] )
+
+    // IPDR connection records.  [formatString: #,0 | displayFolder: IPDR]
+    MEASURE _Measures[IP Sessions] = COUNTROWS ( FactIPSessions )
+
+    // Distinct MSISDNs behind the NAT IP (in context).  [formatString: #,0 | displayFolder: IPDR]
+    MEASURE _Measures[Distinct Subscribers] = DISTINCTCOUNT ( FactIPSessions[msisdn] )
+
+    // Distinct destination IP addresses.  [formatString: #,0 | displayFolder: IPDR]
+    MEASURE _Measures[Distinct Destinations] = DISTINCTCOUNT ( FactIPSessions[dest_ip] )
+
+    // Distinct destination ports.  [formatString: #,0 | displayFolder: IPDR]
+    MEASURE _Measures[Distinct Dest Ports] = DISTINCTCOUNT ( FactIPSessions[dest_port] )
+
+    // Distinct destination providers (incl. 'unattributed').  [formatString: #,0 | displayFolder: IPDR]
+    MEASURE _Measures[Distinct Providers] = DISTINCTCOUNT ( FactIPSessions[dest_provider] )
+
+    // Distinct public (NAT) source ports of 157.48.10.7.  [formatString: #,0 | displayFolder: IPDR]
+    MEASURE _Measures[Distinct Public Ports] = DISTINCTCOUNT ( FactIPSessions[public_port] )
+
+    // Public ports used by more than one MSISDN in the file (40572, 42112).  [formatString: #,0 | displayFolder: IPDR]
+    MEASURE _Measures[Collision Ports] = CALCULATE ( DISTINCTCOUNT ( FactIPSessions[public_port] ), FactIPSessions[public_port_collision] = TRUE () )
+
+    // Sessions whose public port differs from the private port.  [formatString: #,0 | displayFolder: IPDR]
+    MEASURE _Measures[Port-Translated Sessions] = CALCULATE ( COUNTROWS ( FactIPSessions ), FactIPSessions[port_translated] = TRUE () )
+
+    // Sessions whose event time is outside the MSISDN's IP allocation start/end.  [formatString: #,0 | displayFolder: IPDR]
+    MEASURE _Measures[Sessions Outside Alloc Window] = CALCULATE ( COUNTROWS ( FactIPSessions ), FactIPSessions[event_in_alloc_window] = FALSE () )
+
+    // Sessions to destinations with no provider attribution.  [formatString: #,0 | displayFolder: IPDR]
+    MEASURE _Measures[Unattributed Sessions] = CALCULATE ( COUNTROWS ( FactIPSessions ), FactIPSessions[dest_provider] = "unattributed" )
+
+    // IPDR rows whose cell ID was destroyed by float storage in the source file.  [formatString: #,0 | displayFolder: IPDR]
+    MEASURE _Measures[Precision-Lost Cell IDs] = CALCULATE ( COUNTROWS ( FactIPSessions ), FactIPSessions[cell_id_precision_lost] = TRUE () )
+
+    // (public port, MSISDN) pairs in context.  [formatString: #,0 | displayFolder: Port Attribution]
+    MEASURE _Measures[Port-MSISDN Pairs] = COUNTROWS ( PortAttribution )
+
+    // Answer for a port (+ second, + destination) lookup: the single MSISDN, or how many remain.  [formatString: (text measure - none) | displayFolder: Port Attribution]
+    MEASURE _Measures[Lookup Result] =
+        VAR n = DISTINCTCOUNT ( FactIPSessions[msisdn] )
+        VAR isFiltered =
+            ISFILTERED ( DimPublicPort[public_port] )
+                || ISFILTERED ( FactIPSessions[event_hms] )
+                || ISFILTERED ( FactIPSessions[dest_endpoint] )
+        RETURN
+            SWITCH (
+                TRUE (),
+                NOT isFiltered, "Select a public port (and the exact second)",
+                n = 0, "No IPDR record for this port / second",
+                n = 1, "UNIQUE: " & SELECTEDVALUE ( FactIPSessions[msisdn] ),
+                "AMBIGUOUS: " & n & " MSISDNs - add the exact second and destination"
+            )
+
+    // Days between the end of the IPDR window and the start of the CDR window.  [formatString: #,0 | displayFolder: Links]
+    MEASURE _Measures[CDR-IPDR Gap (days)] = MAX ( LinkChecks[gap_days] )
+
+    // Total matches over all CDR<->IPDR link checks (0 = no link).  [formatString: #,0 | displayFolder: Links]
+    MEASURE _Measures[CDR-IPDR Matches] = SUM ( LinkChecks[matches] )
+
+    // Number of CDR<->IPDR checks performed.  [formatString: #,0 | displayFolder: Links]
+    MEASURE _Measures[Link Checks] = COUNTROWS ( LinkChecks )
+
+EVALUATE
+    ROW (
+        "Total Events", [Total Events],
+        "Total Calls", [Total Calls],
+        "Total SMS", [Total SMS],
+        "Total Call Duration (s)", [Total Call Duration (s)],
+        "Talk Time (min)", [Talk Time (min)],
+        "Avg Call Duration (s)", [Avg Call Duration (s)],
+        "Distinct Contacts", [Distinct Contacts],
+        "Outgoing Events", [Outgoing Events],
+        "Incoming Events", [Incoming Events],
+        "Outgoing %", [Outgoing %],
+        "Late-Night Events", [Late-Night Events],
+        "Active Days", [Active Days],
+        "Distinct Cells", [Distinct Cells],
+        "Distinct Sites", [Distinct Sites],
+        "Cell Changes", [Cell Changes],
+        "Events (Last Cell)", [Events (Last Cell)],
+        "Cell Latitude", [Cell Latitude],
+        "Cell Longitude", [Cell Longitude],
+        "Distinct IMEIs", [Distinct IMEIs],
+        "Distinct IMSIs", [Distinct IMSIs],
+        "IMEI Changes", [IMEI Changes],
+        "IP Sessions", [IP Sessions],
+        "Distinct Subscribers", [Distinct Subscribers],
+        "Distinct Destinations", [Distinct Destinations],
+        "Distinct Dest Ports", [Distinct Dest Ports],
+        "Distinct Providers", [Distinct Providers],
+        "Distinct Public Ports", [Distinct Public Ports],
+        "Collision Ports", [Collision Ports],
+        "Port-Translated Sessions", [Port-Translated Sessions],
+        "Sessions Outside Alloc Window", [Sessions Outside Alloc Window],
+        "Unattributed Sessions", [Unattributed Sessions],
+        "Precision-Lost Cell IDs", [Precision-Lost Cell IDs],
+        "Port-MSISDN Pairs", [Port-MSISDN Pairs],
+        "Lookup Result", [Lookup Result],
+        "CDR-IPDR Gap (days)", [CDR-IPDR Gap (days)],
+        "CDR-IPDR Matches", [CDR-IPDR Matches],
+        "Link Checks", [Link Checks]
+    )

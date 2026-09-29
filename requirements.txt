@@ -1,0 +1,18 @@
+# Python 3.12+. Install with:  python -m pip install -r requirements.txt
+# The agents themselves also need the Claude Code CLI (`claude`) on PATH.
+
+# Web console (webapp/app.py)
+flask>=3.1,<4
+
+# Normalization and analysis (normalized/normalize.py, analysis/scripts/*)
+pandas>=2.2
+numpy>=1.26
+openpyxl>=3.1      # .xlsx
+xlrd>=2.0          # legacy .xls
+
+# Visualizations (visuals/scripts/make_visuals.py)
+matplotlib>=3.8
+networkx>=3.2
+
+# Power BI project validation (powerbi/scripts/validate_pbip.py)
+jsonschema>=4.18

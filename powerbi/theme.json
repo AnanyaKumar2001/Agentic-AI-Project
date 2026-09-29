@@ -1,0 +1,38 @@
+{
+  "name": "CDR_IPDR_ColourBlindSafe",
+  "dataColors": [
+    "#0072B2",
+    "#E69F00",
+    "#009E73",
+    "#CC79A7",
+    "#56B4E9",
+    "#D55E00",
+    "#F0E442",
+    "#000000",
+    "#999999",
+    "#004D80",
+    "#A66F00",
+    "#006B4F"
+  ],
+  "foreground": "#1F1F1F",
+  "foregroundNeutralSecondary": "#5A5A5A",
+  "background": "#FFFFFF",
+  "backgroundLight": "#F3F6F9",
+  "backgroundNeutral": "#C8D1DA",
+  "tableAccent": "#0072B2",
+  "good": "#009E73",
+  "neutral": "#E69F00",
+  "bad": "#D55E00",
+  "maximum": "#0072B2",
+  "center": "#56B4E9",
+  "minimum": "#EAF4FB",
+  "null": "#FFFFFF",
+  "hyperlink": "#0072B2",
+  "visitedHyperlink": "#004D80",
+  "textClasses": {
+    "title": { "fontFace": "Segoe UI Semibold", "fontSize": 12, "color": "#1F1F1F" },
+    "header": { "fontFace": "Segoe UI Semibold", "fontSize": 11, "color": "#1F1F1F" },
+    "callout": { "fontFace": "Segoe UI Light", "fontSize": 24, "color": "#0072B2" },
+    "label": { "fontFace": "Segoe UI", "fontSize": 10, "color": "#1F1F1F" }
+  }
+}
