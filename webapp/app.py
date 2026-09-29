@@ -65,8 +65,49 @@ Pipeline, in order:
 
 Raw record files currently in the workspace root: {raw_files}
 
+Custom agents (created by the user in the console):
+{custom_agents}
+- Run a custom agent when the user names it (or clearly asks for what it does), with a self-contained task like any other agent.
+- "Run all agents" also runs every custom agent, after step 5, in parallel in a single message, since they may use earlier outputs.
+
 When finished, reply with a concise markdown report: a table of the agents that ran with their status, the key findings (with numbers), and the main output paths.
 In the status column use ✅ for an agent that completed its task (with a short note of what it produced) and ❌ only for an agent that failed; reserve ⚠️ for real data or analysis problems, not for how reports were delivered."""
+
+AGENTS_DIR = ROOT / ".claude" / "agents"
+AGENT_NAME_RE = re.compile(r"^[a-z][a-z0-9-]{1,48}[a-z0-9]$")
+AGENT_MAX_BYTES = 100_000
+KNOWN_TOOLS = {"Read", "Write", "Edit", "Glob", "Grep", "Bash", "WebFetch", "WebSearch", "NotebookEdit", "TodoWrite"}
+
+AGENT_GENERATOR_PROMPT = """You write Claude Code subagent definition files for a telecom CDR/IPDR investigative-analysis workspace.
+
+Write ONE new subagent file for this request:
+<request>
+{request}
+</request>
+{name_hint}
+Workspace conventions the agent must follow:
+- Raw operator exports (.xls/.xlsx/.csv) are in the workspace root and are read-only evidence: never modify, rename or delete them.
+- Normalized records are in ./normalized/*.csv (standard CDR/IPDR schema, see .claude/agents/record-normalizer.md); analysis tables are in ./analysis/<dataset>/ and ./analysis/links/; charts in ./visuals/; Power BI files in ./powerbi/.
+- Use Python with pandas (use .venv\\Scripts\\python.exe if it exists, otherwise python). Save scripts under ./analysis/scripts/ so results can be reproduced.
+- Write outputs only under ./analysis/<agent-topic>/ (or ./visuals/<topic>/ for images). Never write report.md files: return the report in the final reply.
+- Keep phone numbers, IMEI, IMSI and cell IDs as text. Distinguish fact from inference. State data-quality issues.
+- It runs non-interactively inside a pipeline: it must never ask the user questions.
+
+Existing agents (do not duplicate them; the new agent may build on their outputs):
+{existing}
+
+File format (Markdown with YAML front matter), modelled on this existing agent:
+<example>
+{example}
+</example>
+
+Rules for the front matter:
+- name: lowercase kebab-case, 3-50 characters, unique (not one of the existing names).
+- description: one or two sentences saying what it does and when to use it.
+- tools: a comma-separated subset of: Read, Glob, Grep, Bash, Write, Edit, WebFetch. Give only what it needs.
+Body: role, Setup, Analysis (concrete steps), Output (file paths and the final report) sections, concise and specific.
+
+Reply with only the complete file between <agent_file> and </agent_file>, with no other text."""
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["JSON_SORT_KEYS"] = False
@@ -377,7 +418,10 @@ def run_worker(run: Run):
         return
 
     before = snapshot_outputs()
-    sys_prompt = ORCHESTRATOR_PROMPT.format(raw_files=", ".join(raw_files()) or "(none)")
+    customs = custom_agents()
+    sys_prompt = ORCHESTRATOR_PROMPT.format(
+        raw_files=", ".join(raw_files()) or "(none)",
+        custom_agents="\n".join(f"  - {a['name']}: {short(a['description'], 300)}" for a in customs) or "  (none)")
     cmd = [claude, "-p", run.prompt, "--output-format", "stream-json", "--verbose",
            "--permission-mode", "acceptEdits", "--allowedTools", ALLOWED_TOOLS,
            "--append-system-prompt", sys_prompt]
@@ -467,10 +511,179 @@ def index():
     return render_template("index.html")
 
 
+# ------------------------------------------------------------------ agents ---
+
+def parse_agent(text: str) -> dict:
+    """Validate an agent definition (YAML front matter + body) and return its metadata."""
+    text = text.replace("\r\n", "\n").lstrip("﻿")
+    if len(text.encode("utf-8")) > AGENT_MAX_BYTES:
+        raise ValueError(f"File is larger than {AGENT_MAX_BYTES // 1000} KB.")
+    m = re.match(r"^---\n(.*?)\n---\n(.*)$", text, re.S)
+    if not m:
+        raise ValueError("The file must start with a front-matter block between '---' lines (name, description, tools).")
+    meta = {}
+    for line in m.group(1).splitlines():
+        if ":" in line and not line.startswith((" ", "\t", "#")):
+            k, v = line.split(":", 1)
+            meta[k.strip()] = v.strip().strip('"').strip("'")
+    name, desc, body = meta.get("name", ""), meta.get("description", ""), m.group(2).strip()
+    if not AGENT_NAME_RE.match(name):
+        raise ValueError("'name' must be lowercase kebab-case, 3–50 characters (e.g. sms-pattern-analyst).")
+    if not desc:
+        raise ValueError("'description' is missing; it tells the orchestrator when to use the agent.")
+    if len(body) < 40:
+        raise ValueError("The agent's instructions (the text after the front matter) are missing or too short.")
+    tools = [t.strip() for t in meta.get("tools", "").split(",") if t.strip()]
+    unknown = [t for t in tools if t not in KNOWN_TOOLS and not t.startswith("mcp__")]
+    if unknown:
+        raise ValueError(f"Unknown tool(s) in 'tools': {', '.join(unknown)}.")
+    return {"name": name, "description": desc, "tools": tools, "model": meta.get("model", ""), "text": text}
+
+
+def list_agents():
+    agents = []
+    if AGENTS_DIR.exists():
+        for p in sorted(AGENTS_DIR.glob("*.md")):
+            try:
+                a = parse_agent(p.read_text(encoding="utf-8", errors="replace"))
+            except ValueError:
+                continue
+            st = p.stat()
+            agents.append({"name": a["name"], "description": a["description"], "tools": a["tools"],
+                           "model": a["model"], "builtin": a["name"] in AGENT_NAMES,
+                           "file": rel(p), "size": st.st_size, "mtime": st.st_mtime})
+    return agents
+
+
+def custom_agents():
+    return [a for a in list_agents() if not a["builtin"]]
+
+
+def blurb(desc, n=64):
+    first = re.split(r"(?<=[.!?])\s", desc, maxsplit=1)[0]
+    return short(first, n)
+
+
+def save_agent(text, overwrite=False, auto_rename=False):
+    """Validate and write an agent file. Returns (metadata, path). Raises ValueError / FileExistsError."""
+    a = parse_agent(text)
+    AGENTS_DIR.mkdir(parents=True, exist_ok=True)
+    existing = {x["name"] for x in list_agents()}
+    name = a["name"]
+    if name in existing and not overwrite:
+        if not auto_rename:
+            raise FileExistsError(name)
+        i = 2
+        while f"{name}-{i}" in existing:
+            i += 1
+        name = f"{name}-{i}"
+        a["text"] = re.sub(r"(?m)^name:.*$", f"name: {name}", a["text"], count=1)
+        a["name"] = name
+    path = AGENTS_DIR / f"{name}.md"
+    path.write_text(a["text"].rstrip() + "\n", encoding="utf-8")
+    return a, path
+
+
+@app.get("/api/agents")
+def api_agents():
+    return jsonify(list_agents())
+
+
+@app.get("/api/agents/<name>")
+def api_agent(name):
+    if not AGENT_NAME_RE.match(name):
+        abort(404)
+    for p in AGENTS_DIR.glob("*.md"):
+        try:
+            a = parse_agent(p.read_text(encoding="utf-8", errors="replace"))
+        except ValueError:
+            continue
+        if a["name"] == name:
+            return jsonify({"name": name, "file": rel(p), "content": a["text"]})
+    abort(404)
+
+
+@app.post("/api/agents/upload")
+def api_agent_upload():
+    f = request.files.get("file")
+    if not f or not f.filename:
+        return jsonify({"error": "Choose an agent file (.md) to upload."}), 400
+    if not f.filename.lower().endswith(".md"):
+        return jsonify({"error": "Agent files must be Markdown (.md)."}), 400
+    raw = f.read(AGENT_MAX_BYTES + 1)
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        return jsonify({"error": "The file is not UTF-8 text."}), 400
+    try:
+        a, path = save_agent(text, overwrite=request.form.get("overwrite") == "1")
+    except FileExistsError as ex:
+        return jsonify({"error": f"An agent named '{ex}' already exists. Tick 'Replace existing agent' to overwrite it.",
+                        "conflict": str(ex)}), 409
+    except ValueError as ex:
+        return jsonify({"error": str(ex)}), 400
+    return jsonify({"name": a["name"], "file": rel(path), "content": a["text"],
+                    "replaced_builtin": a["name"] in AGENT_NAMES})
+
+
+@app.post("/api/agents/generate")
+def api_agent_generate():
+    body = request.get_json(force=True, silent=True) or {}
+    req = (body.get("prompt") or "").strip()
+    name = (body.get("name") or "").strip().lower()
+    model = (body.get("model") or "").strip() or None
+    if len(req) < 15:
+        return jsonify({"error": "Describe what the new agent should do (at least a sentence)."}), 400
+    if name and not AGENT_NAME_RE.match(name):
+        return jsonify({"error": "Name must be lowercase kebab-case, 3–50 characters (e.g. sms-pattern-analyst)."}), 400
+    if name and name in {a["name"] for a in list_agents()} and not body.get("overwrite"):
+        return jsonify({"error": f"An agent named '{name}' already exists. Choose another name or tick 'Replace existing agent'.",
+                        "conflict": name}), 409
+    if model and model not in ("sonnet", "opus", "haiku", "fable"):
+        return jsonify({"error": "Unknown model."}), 400
+    claude = shutil.which("claude") or shutil.which("claude.exe")
+    if not claude:
+        return jsonify({"error": "Claude Code CLI ('claude') was not found on PATH."}), 500
+
+    example = (AGENTS_DIR / "cdr-analyst.md")
+    existing = "\n".join(f"- {a['name']}: {blurb(a['description'], 140)}" for a in list_agents()) or "(none)"
+    prompt = AGENT_GENERATOR_PROMPT.format(
+        request=req, existing=existing,
+        name_hint=f"Use exactly this name: {name}\n" if name else "",
+        example=example.read_text(encoding="utf-8") if example.exists() else "(no example available)")
+    cmd = [claude, "-p", prompt, "--tools", "", "--output-format", "json", "--no-session-persistence"]
+    if model:
+        cmd += ["--model", model]
+    try:
+        proc = subprocess.run(cmd, cwd=ROOT, stdin=subprocess.DEVNULL, capture_output=True, timeout=300,
+                              creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+    except subprocess.TimeoutExpired:
+        return jsonify({"error": "Generating the agent timed out. Try again or simplify the request."}), 504
+    try:
+        result = json.loads(proc.stdout.decode("utf-8", errors="replace")).get("result") or ""
+    except json.JSONDecodeError:
+        err = proc.stderr.decode("utf-8", errors="replace").strip()[-300:]
+        return jsonify({"error": f"Claude Code did not return a result. {err}"}), 502
+
+    m = re.search(r"<agent_file>\s*(.*?)\s*</agent_file>", result, re.S)
+    text = m.group(1) if m else result
+    text = re.sub(r"^```(?:markdown|md)?\s*\n(.*?)\n```\s*$", r"\1", text.strip(), flags=re.S)
+    if name:
+        text = re.sub(r"(?m)^name:.*$", f"name: {name}", text, count=1)
+    try:
+        a, path = save_agent(text, overwrite=bool(body.get("overwrite")) and bool(name), auto_rename=not name)
+    except ValueError as ex:
+        return jsonify({"error": f"The generated file was not a valid agent ({ex}) Try rephrasing the request."}), 502
+    return jsonify({"name": a["name"], "file": rel(path), "content": a["text"]})
+
+
 @app.get("/api/config")
 def config():
+    pipeline = [{"name": n, "title": t, "blurb": b, "custom": False} for n, t, b in PIPELINE]
+    pipeline += [{"name": a["name"], "title": a["name"].replace("-", " ").title(), "blurb": blurb(a["description"]),
+                  "custom": True} for a in custom_agents()]
     return jsonify({
-        "pipeline": [{"name": n, "title": t, "blurb": b} for n, t, b in PIPELINE],
+        "pipeline": pipeline,
         "raw_files": raw_files(),
         "active": ACTIVE["id"],
         "claude_found": bool(shutil.which("claude") or shutil.which("claude.exe")),

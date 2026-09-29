@@ -20,6 +20,9 @@
     <span>CDR &amp; IPDR Agent Console</span>
   </div>
   <nav class="main-nav" role="tablist" aria-label="Sections">
+    <button type="button" class="main-tab" id="navAgents" role="tab" aria-selected="false" aria-controls="viewAgents" data-view="agents">
+      <span aria-hidden="true">✨</span> Create agents <span class="main-tab-sub">Describe or upload</span>
+    </button>
     <button type="button" class="main-tab active" id="navRun" role="tab" aria-selected="true" aria-controls="viewRun" data-view="run">
       <span aria-hidden="true">▶</span> Run <span class="main-tab-sub">Instruction &amp; status</span>
     </button>
@@ -101,6 +104,66 @@
       </div>
       <nav id="tabs" class="tabs" role="tablist"></nav>
       <div id="tabBody" class="tab-body"></div>
+    </section>
+  </div>
+
+  <div id="viewAgents" class="view" role="tabpanel" aria-labelledby="navAgents" hidden>
+    <div class="agent-create-grid">
+      <!-- Describe -->
+      <section class="card accent-violet">
+        <div class="section-head"><h2>Describe a new agent</h2></div>
+        <form id="genForm" class="agent-form">
+          <label for="genPrompt" class="label">What should the agent do?</label>
+          <textarea id="genPrompt" rows="6" placeholder='e.g. "Find SMS patterns in each CDR: OTP and service senders, bursts, and contacts reached only by SMS. Save tables and a short report."'></textarea>
+          <div class="form-row">
+            <label class="field"><span>Agent name <span class="muted small">(optional)</span></span>
+              <input id="genName" type="text" placeholder="sms-pattern-analyst" autocomplete="off" spellcheck="false" pattern="[a-z][a-z0-9-]{1,48}[a-z0-9]">
+            </label>
+            <label class="field"><span>Model</span>
+              <select id="genModel">
+                <option value="">Default</option>
+                <option value="sonnet">Sonnet</option>
+                <option value="opus">Opus</option>
+                <option value="haiku">Haiku</option>
+              </select>
+            </label>
+          </div>
+          <label class="toggle"><input type="checkbox" id="genOverwrite"> Replace existing agent with the same name</label>
+          <div class="form-actions">
+            <button type="submit" id="genBtn" class="btn primary">✨ Create agent</button>
+            <span id="genStatus" class="small muted" role="status"></span>
+          </div>
+        </form>
+      </section>
+
+      <!-- Upload -->
+      <section class="card accent-teal">
+        <div class="section-head"><h2>Upload an agent file</h2></div>
+        <form id="upForm" class="agent-form">
+          <label id="dropZone" class="drop-zone" for="upFile">
+            <input id="upFile" type="file" accept=".md,text/markdown">
+            <span class="dz-icon" aria-hidden="true">📄</span>
+            <span class="dz-title">Drop a <code>.md</code> agent file here, or click to choose</span>
+            <span id="upFileName" class="small muted">Front matter needs <code>name</code> and <code>description</code>; <code>tools</code> is optional.</span>
+          </label>
+          <label class="toggle"><input type="checkbox" id="upOverwrite"> Replace existing agent with the same name</label>
+          <div class="form-actions">
+            <button type="submit" id="upBtn" class="btn primary">⬆ Upload agent</button>
+            <span id="upStatus" class="small muted" role="status"></span>
+          </div>
+        </form>
+      </section>
+    </div>
+
+    <div id="agentResult" hidden></div>
+
+    <!-- All agents -->
+    <section class="card accent-indigo">
+      <div class="section-head">
+        <h2>Agents in this project</h2>
+        <span class="muted small">Saved in <code>.claude/agents/</code> · new agents appear on the Run tab</span>
+      </div>
+      <div id="agentList" class="agent-list"></div>
     </section>
   </div>
 </main>

@@ -42,7 +42,18 @@
     "powerbi-dashboard": { color: "amber", icon: "📈" },
     system: { color: "slate", icon: "⚙️" },
   };
-  const agentStyle = (name) => AGENT_STYLE[name] || { color: "cyan", icon: "🤖" };
+  // Custom agents get a stable colour derived from their name.
+  const CUSTOM_COLORS = ["cyan", "violet", "green", "orange", "teal", "pink", "blue", "amber"];
+  const agentStyle = (name) => {
+    if (AGENT_STYLE[name]) return AGENT_STYLE[name];
+    // Known custom agents take colours in order so neighbours differ; unknown names fall back to a hash.
+    const customs = (state.config?.pipeline || []).filter((p) => p.custom).map((p) => p.name);
+    const i = customs.indexOf(name);
+    if (i >= 0) return { color: CUSTOM_COLORS[i % CUSTOM_COLORS.length], icon: "🤖" };
+    let hash = 0;
+    for (const ch of String(name)) hash = (hash * 31 + ch.charCodeAt(0)) >>> 0;
+    return { color: CUSTOM_COLORS[hash % CUSTOM_COLORS.length], icon: "🤖" };
+  };
   const cvar = (color) => `--c: var(--${color})`;
   const agentVar = (name) => cvar(agentStyle(name).color);
   // Folders get a colour from a rotating palette so gallery sections are easy to tell apart.
@@ -170,24 +181,154 @@
   }
 
   /* ------------------------------------------------------ section views --- */
+  const VIEWS = [["run", "#viewRun", "#navRun"], ["outputs", "#viewOutputs", "#navOutputs"], ["agents", "#viewAgents", "#navAgents"]];
+  const viewFromHash = () => ({ "#outputs": "outputs", "#agents": "agents" }[location.hash] || "run");
+
   function setupViews() {
     document.querySelectorAll(".main-tab").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
     $("#viewOutputsBtn").addEventListener("click", () => { state.tab = "report"; renderTabs(); showView("outputs"); });
-    window.addEventListener("hashchange", () => showView(location.hash === "#outputs" ? "outputs" : "run", false));
-    showView(location.hash === "#outputs" ? "outputs" : "run", false);
+    window.addEventListener("hashchange", () => showView(viewFromHash(), false));
+    setupAgentForms();
+    showView(viewFromHash(), false);
   }
 
   function showView(view, updateHash = true) {
     state.view = view;
-    for (const [v, id, nav] of [["run", "#viewRun", "#navRun"], ["outputs", "#viewOutputs", "#navOutputs"]]) {
+    for (const [v, id, nav] of VIEWS) {
       const on = v === view;
       $(id).hidden = !on;
       $(nav).classList.toggle("active", on);
       $(nav).setAttribute("aria-selected", on ? "true" : "false");
     }
     if (view === "outputs") { $("#outputsBadge").hidden = true; renderTabs(); renderTab(); }
-    if (updateHash) history.replaceState(null, "", view === "outputs" ? "#outputs" : location.pathname + location.search);
+    if (view === "agents") loadAgents();
+    if (updateHash) history.replaceState(null, "", view === "run" ? location.pathname + location.search : "#" + view);
     window.scrollTo({ top: 0 });
+  }
+
+  /* ----------------------------------------------------- create agents --- */
+  // Re-read the agent list so new agents show up as chips and status cards on the Run tab.
+  async function refreshConfig() {
+    state.config = await (await fetch("/api/config")).json();
+    renderChips(); syncChips(); renderPipeline();
+  }
+
+  function setupAgentForms() {
+    $("#genForm").addEventListener("submit", (e) => { e.preventDefault(); generateAgent(); });
+    $("#upForm").addEventListener("submit", (e) => { e.preventDefault(); uploadAgent(); });
+    const dz = $("#dropZone"), input = $("#upFile");
+    const showName = () => {
+      const f = input.files[0];
+      dz.classList.toggle("has-file", !!f);
+      $("#upFileName").textContent = f ? `${f.name} · ${fmtSize(f.size)}` : "Front matter needs name and description; tools is optional.";
+    };
+    input.addEventListener("change", showName);
+    ["dragenter", "dragover"].forEach((t) => dz.addEventListener(t, (e) => { e.preventDefault(); dz.classList.add("over"); }));
+    ["dragleave", "drop"].forEach((t) => dz.addEventListener(t, () => dz.classList.remove("over")));
+    dz.addEventListener("drop", (e) => {
+      e.preventDefault();
+      if (e.dataTransfer.files.length) { input.files = e.dataTransfer.files; showName(); }
+    });
+  }
+
+  async function generateAgent() {
+    const prompt = $("#genPrompt").value.trim();
+    const name = $("#genName").value.trim();
+    if (prompt.length < 15) return agentResult({ error: "Describe what the new agent should do (at least a sentence)." });
+    if (name && !$("#genName").checkValidity()) return agentResult({ error: "Agent name must be lowercase kebab-case, e.g. sms-pattern-analyst." });
+    const btn = $("#genBtn"), status = $("#genStatus");
+    btn.disabled = true;
+    const t0 = Date.now();
+    const tickStatus = () => { status.innerHTML = `<span class="busy-dot"></span>Claude is writing the agent… ${fmtDur((Date.now() - t0) / 1000)} (usually 20–60 s)`; };
+    tickStatus();
+    const timer = setInterval(tickStatus, 1000);
+    try {
+      const res = await fetch("/api/agents/generate", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ prompt, name, model: $("#genModel").value, overwrite: $("#genOverwrite").checked }),
+      });
+      const data = await res.json();
+      agentResult(res.ok ? { ...data, verb: "created" } : { error: data.error || "Could not create the agent." });
+      if (res.ok) { $("#genPrompt").value = ""; $("#genName").value = ""; await refreshConfig(); loadAgents(); }
+    } catch (e) {
+      agentResult({ error: "The server could not be reached." });
+    } finally {
+      clearInterval(timer); btn.disabled = false; status.textContent = "";
+    }
+  }
+
+  async function uploadAgent() {
+    const file = $("#upFile").files[0];
+    if (!file) return agentResult({ error: "Choose an agent file (.md) to upload." });
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("overwrite", $("#upOverwrite").checked ? "1" : "0");
+    $("#upBtn").disabled = true; $("#upStatus").textContent = "Uploading…";
+    try {
+      const res = await fetch("/api/agents/upload", { method: "POST", body: fd });
+      const data = await res.json();
+      agentResult(res.ok ? { ...data, verb: data.replaced_builtin ? "uploaded (replaced a built-in agent)" : "uploaded" } : { error: data.error || "Upload failed." });
+      if (res.ok) {
+        $("#upFile").value = ""; $("#upFile").dispatchEvent(new Event("change"));
+        await refreshConfig(); loadAgents();
+      }
+    } catch (e) {
+      agentResult({ error: "The server could not be reached." });
+    } finally {
+      $("#upBtn").disabled = false; $("#upStatus").textContent = "";
+    }
+  }
+
+  function agentResult(r) {
+    const box = $("#agentResult");
+    box.hidden = false; box.innerHTML = "";
+    if (r.error) {
+      box.append(h("section", { class: "card agent-result error", role: "alert" },
+        h("div", { class: "result-head" }, h("h2", {}, "Agent not saved")), h("p", {}, r.error)));
+    } else {
+      box.append(h("section", { class: "card agent-result", style: agentVar(r.name) },
+        h("div", { class: "result-head" },
+          h("h2", {}, `✅ Agent ${r.verb}: `, h("code", {}, r.name)),
+          h("div", { class: "form-actions" },
+            h("span", { class: "muted small" }, "Saved to ", h("code", {}, r.file)),
+            h("button", { class: "btn primary", type: "button", onclick: () => useAgent(r.name) }, "Use it on the Run tab →"))),
+        h("pre", { class: "agent-src" }, r.content)));
+    }
+    box.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  }
+
+  function useAgent(name) {
+    state.selected = new Set([name]); syncChips();
+    $("#prompt").value = `Run the ${name} agent`;
+    showView("run");
+    $("#prompt").focus();
+  }
+
+  async function loadAgents() {
+    const list = $("#agentList");
+    const agents = await (await fetch("/api/agents")).json();
+    list.innerHTML = "";
+    const order = (a) => a.builtin ? state.config.pipeline.findIndex((p) => p.name === a.name) : 100;
+    agents.sort((a, b) => order(a) - order(b) || a.name.localeCompare(b.name));
+    for (const a of agents) {
+      const src = h("pre", { class: "agent-src" }, "Loading…");
+      const row = h("details", { class: "agent-row", style: agentVar(a.name) },
+        h("summary", {},
+          h("span", { class: "ico", "aria-hidden": "true" }, agentStyle(a.name).icon),
+          h("div", {}, h("div", { class: "a-name" }, a.name), h("div", { class: "a-desc" }, a.description)),
+          h("div", { class: "a-meta" },
+            h("span", { class: "tag" + (a.builtin ? "" : " custom") }, a.builtin ? "built-in" : "custom"),
+            a.tools.length ? h("span", { class: "tag", title: "Tools" }, a.tools.join(", ")) : h("span", { class: "tag" }, "all tools"),
+            h("span", { class: "tag" }, fmtSize(a.size)))),
+        src);
+      row.addEventListener("toggle", async () => {
+        if (!row.open || src.dataset.loaded) return;
+        const d = await (await fetch(`/api/agents/${encodeURIComponent(a.name)}`)).json();
+        src.textContent = d.content; src.dataset.loaded = "1";
+      });
+      list.append(row);
+    }
+    if (!agents.length) list.append(h("div", { class: "empty" }, "No agents found in .claude/agents/."));
   }
 
   async function stopRun() {
@@ -387,7 +528,9 @@
   }
 
   function stageName(agent, title) {
-    return h("span", { class: "name" }, h("span", { class: "ico", "aria-hidden": "true" }, agentStyle(agent).icon), title);
+    const custom = state.config.pipeline.some((p) => p.name === agent && p.custom);
+    return h("span", { class: "name" }, h("span", { class: "ico", "aria-hidden": "true" }, agentStyle(agent).icon), title,
+      custom ? h("span", { class: "tag custom" }, "custom") : null);
   }
 
   function stateLabel(st, runStatus) {

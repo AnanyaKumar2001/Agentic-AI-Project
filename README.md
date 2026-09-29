@@ -104,6 +104,18 @@ The server listens on `127.0.0.1` only. Stop it with `Ctrl+C` in its terminal.
    Tick *Only files changed in this run* to filter the tabs down to the latest results.
 5. **Reopen earlier runs** from the **Run** dropdown at the top right.
 
+The header has three tabs, in this order: **Create agents**, **Run** (instruction and status) and **Outputs**. The page opens on **Run**.
+
+### Creating your own agents
+
+Open the **✨ Create agents** tab:
+
+- **Describe a new agent**: write what the agent should do (e.g. *"Find SMS patterns in each CDR: OTP and service senders, bursts, and contacts reached only by SMS"*). Optionally give it a kebab-case name and pick a model, then click **Create agent**. Claude writes the definition, following this project's conventions (read-only evidence, `normalized/` inputs, outputs under `analysis/`), usually in 20–60 seconds. The server checks the file and saves it to `.claude/agents/<name>.md`. Claude has no tools during this step, so it can't change any files.
+- **Upload an agent file**: drop in a `.md` file with front matter (`name`, `description`, optional `tools`) and it is validated and saved to `.claude/agents/`. To replace an existing agent with the same name, tick *Replace existing agent*.
+- **Agents in this project** lists every agent (built-in or custom). Expand one to read its definition.
+
+New agents appear straight away on the Run tab as chips and status cards (marked *custom*). Run one by name (e.g. `Run the sms-pattern-analyst agent`). **Run all agents** runs custom agents too, after the built-in pipeline. To remove a custom agent, delete its file from `.claude/agents/`.
+
 Only one run can be active at a time. Rendering markdown and Mermaid diagrams needs internet access (the libraries load from a CDN); without it, they show as plain text.
 
 ## Running the agents without the web console
