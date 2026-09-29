@@ -63,7 +63,11 @@ Pipeline, in order:
 - Subagents return their written report in their final reply; the console saves that reply as the agent's report.
   Do not ask subagents to write report.md (or other report files), and never treat a missing report file as a problem or mention it.
 
-Raw record files currently in the workspace root: {raw_files}
+Raw record files currently in the workspace root (type as set by the user; "auto" = detect from the columns):
+{raw_files}
+- CDR files go to cdr-analyst (one agent per file) and IPDR files to ipdr-analyst (one per file).
+- "Cell ID list" files are tower reference data (cell ID -> site, address, lat/long), not a subject's activity: normalize them as cell-site lists, then pass them to cdr-analyst, ipdr-analyst, link-analyzer and viz-generator to locate cell IDs. Do not run cdr-analyst on them.
+- Files marked "not yet normalized" (e.g. newly uploaded) must go through record-normalizer before any analysis that uses them, even if the user only named later agents.
 
 Custom agents (created by the user in the console):
 {custom_agents}
@@ -111,6 +115,7 @@ Reply with only the complete file between <agent_file> and </agent_file>, with n
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["JSON_SORT_KEYS"] = False
+app.config["MAX_CONTENT_LENGTH"] = 520 * 1024 * 1024  # uploads; per-file limit is checked while saving
 
 RUNS = {}          # run_id -> Run
 RUN_LOCK = threading.Lock()
@@ -143,6 +148,88 @@ def safe_path(relpath: str) -> Path:
 
 def raw_files():
     return sorted(p.name for p in ROOT.iterdir() if p.is_file() and p.suffix.lower() in RAW_EXTS)
+
+
+# ------------------------------------------------------------ input files ---
+# Record files live in the project root (where the agents look). Their user-set
+# type is kept in a small manifest next to them (git-ignored, like the data).
+INPUTS_MANIFEST = ROOT / ".inputs.json"
+INPUT_TYPES = {"cdr": "CDR", "ipdr": "IPDR", "cellid": "Cell ID list", "auto": "auto"}
+INPUT_MAX_BYTES = 500 * 1024 * 1024
+MANIFEST_LOCK = threading.Lock()
+
+
+def load_manifest():
+    try:
+        return json.loads(INPUTS_MANIFEST.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_manifest(m):
+    tmp = INPUTS_MANIFEST.with_suffix(".tmp")
+    tmp.write_text(json.dumps(m, indent=2, ensure_ascii=False), encoding="utf-8")
+    os.replace(tmp, INPUTS_MANIFEST)
+
+
+def guess_input_type(name):
+    n = name.lower()
+    if "ipdr" in n:
+        return "ipdr"
+    if any(k in n for k in ("cell", "site", "tower", "cgi", "bts")):
+        return "cellid"
+    if "cdr" in n:
+        return "cdr"
+    return "auto"
+
+
+def is_normalized(name):
+    stem = Path(name).stem
+    folder = ROOT / "normalized"
+    return folder.exists() and any(p.name.startswith(stem) and p.suffix == ".csv" for p in folder.iterdir())
+
+
+def input_files():
+    m = load_manifest()
+    out = []
+    for name in raw_files():
+        st = (ROOT / name).stat()
+        info = m.get(name, {})
+        out.append({"name": name, "size": st.st_size, "mtime": st.st_mtime,
+                    "type": info.get("type") or guess_input_type(name), "uploaded": info.get("uploaded"),
+                    "normalized": is_normalized(name)})
+    return out
+
+
+def describe_inputs():
+    lines = []
+    for f in input_files():
+        notes = [INPUT_TYPES.get(f["type"], "auto")]
+        if not f["normalized"]:
+            notes.append("not yet normalized")
+        if f["uploaded"]:
+            notes.append(f"uploaded {f['uploaded'][:16].replace('T', ' ')}")
+        lines.append(f"  - {f['name']}  [{'; '.join(notes)}]")
+    return "\n".join(lines) or "  (none)"
+
+
+def safe_input_name(filename):
+    """Keep a readable file name but strip any path and unsafe characters."""
+    name = Path(filename.replace("\\", "/")).name.strip()
+    name = re.sub(r"[^\w .()\-+,]", "_", name).strip(" .")
+    stem, ext = os.path.splitext(name)
+    if not stem or ext.lower() not in RAW_EXTS:
+        return None
+    return stem[:150] + ext.lower()
+
+
+def looks_like(ext, head: bytes):
+    if ext == ".xls":
+        # Legacy binary Excel; some operators export HTML/XML tables named .xls, which pandas can still read.
+        return head.startswith(b"\xd0\xcf\x11\xe0") or head.lstrip()[:1] == b"<"
+    if ext == ".xlsx":
+        return head.startswith(b"PK")
+    return b"\x00" not in head  # .csv: must be text
 
 
 def snapshot_outputs():
@@ -420,7 +507,7 @@ def run_worker(run: Run):
     before = snapshot_outputs()
     customs = custom_agents()
     sys_prompt = ORCHESTRATOR_PROMPT.format(
-        raw_files=", ".join(raw_files()) or "(none)",
+        raw_files=describe_inputs(),
         custom_agents="\n".join(f"  - {a['name']}: {short(a['description'], 300)}" for a in customs) or "  (none)")
     cmd = [claude, "-p", run.prompt, "--output-format", "stream-json", "--verbose",
            "--permission-mode", "acceptEdits", "--allowedTools", ALLOWED_TOOLS,
@@ -677,6 +764,68 @@ def api_agent_generate():
     return jsonify({"name": a["name"], "file": rel(path), "content": a["text"]})
 
 
+@app.get("/api/inputs")
+def api_inputs():
+    return jsonify({"files": input_files(), "types": INPUT_TYPES, "max_bytes": INPUT_MAX_BYTES})
+
+
+@app.post("/api/inputs/upload")
+def api_input_upload():
+    f = request.files.get("file")
+    ftype = request.form.get("type", "auto")
+    if not f or not f.filename:
+        return jsonify({"error": "Choose a file to upload."}), 400
+    if ftype not in INPUT_TYPES:
+        return jsonify({"error": "Unknown file type."}), 400
+    name = safe_input_name(f.filename)
+    if not name:
+        return jsonify({"error": f"'{f.filename}': only .xls, .xlsx and .csv record files can be uploaded."}), 400
+    dest = ROOT / name
+    if dest.exists() and request.form.get("overwrite") != "1":
+        return jsonify({"error": f"'{name}' is already in the project. Tick 'Replace files with the same name' to overwrite it.",
+                        "conflict": name}), 409
+
+    head = f.stream.read(512)
+    if not looks_like(dest.suffix.lower(), head):
+        return jsonify({"error": f"'{name}' does not look like a real {dest.suffix} file."}), 400
+    tmp = ROOT / f".{name}.uploading"
+    size = len(head)
+    try:
+        with open(tmp, "wb") as out:
+            out.write(head)
+            while chunk := f.stream.read(1024 * 1024):
+                size += len(chunk)
+                if size > INPUT_MAX_BYTES:
+                    raise ValueError
+                out.write(chunk)
+        os.replace(tmp, dest)   # atomic: a running agent never sees a half-written file
+    except ValueError:
+        tmp.unlink(missing_ok=True)
+        return jsonify({"error": f"'{name}' is larger than {INPUT_MAX_BYTES // 1024 // 1024} MB."}), 413
+    except OSError as ex:
+        tmp.unlink(missing_ok=True)
+        return jsonify({"error": f"Could not save '{name}': {ex}"}), 500
+
+    with MANIFEST_LOCK:
+        m = load_manifest()
+        m[name] = {"type": ftype, "uploaded": now_iso(), "original_name": f.filename}
+        save_manifest(m)
+    return jsonify({"name": name, "size": size, "type": ftype, "renamed": name != Path(f.filename).name})
+
+
+@app.post("/api/inputs/type")
+def api_input_type():
+    body = request.get_json(force=True, silent=True) or {}
+    name, ftype = body.get("name", ""), body.get("type", "")
+    if name not in raw_files() or ftype not in INPUT_TYPES:
+        return jsonify({"error": "Unknown file or type."}), 400
+    with MANIFEST_LOCK:
+        m = load_manifest()
+        m.setdefault(name, {})["type"] = ftype
+        save_manifest(m)
+    return jsonify({"ok": True})
+
+
 @app.get("/api/config")
 def config():
     pipeline = [{"name": n, "title": t, "blurb": b, "custom": False} for n, t, b in PIPELINE]
@@ -685,6 +834,7 @@ def config():
     return jsonify({
         "pipeline": pipeline,
         "raw_files": raw_files(),
+        "inputs": [{"name": f["name"], "type": f["type"], "normalized": f["normalized"]} for f in input_files()],
         "active": ACTIVE["id"],
         "claude_found": bool(shutil.which("claude") or shutil.which("claude.exe")),
     })

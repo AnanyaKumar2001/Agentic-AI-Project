@@ -69,7 +69,12 @@ pip install -r requirements.txt
 
 ## Add your record files
 
-Copy the raw operator exports (`.xls`, `.xlsx` or `.csv`, CDR and/or IPDR) into the **project root**, next to this README. They don't need any preparation: the `record-normalizer` agent finds the header rows, detects the operator and works out whether each file is a CDR or an IPDR. Source files are treated as read-only evidence and are never modified.
+There are two ways to add raw operator exports (`.xls`, `.xlsx` or `.csv`): CDRs, IPDRs and cell-ID / cell-site lists.
+
+- **In the web console:** open the **📥 Upload files** tab, drop in one or more files, set each file's type (*CDR*, *IPDR*, *Cell ID list* or *Auto-detect*; the type is guessed from the file name) and click **Upload files**. Files are saved to the project root, and their types are recorded in `.inputs.json` (git-ignored). The list below the upload area shows every record file, its type (which you can change) and whether it has been processed yet. When files are new, **▶ Process new files** fills in an instruction on the Run tab to normalize and analyze them.
+- **By hand:** copy the files into the **project root**, next to this README.
+
+The files don't need any preparation. The `record-normalizer` agent finds the header rows and detects the operator and record type. The orchestrator is given each file's type: CDRs go to `cdr-analyst`, IPDRs to `ipdr-analyst`, and cell-ID lists are used as tower reference data to put cell IDs on the map. Source files are treated as read-only evidence and are never modified. Uploads are limited to 500 MB per file and are checked to be real Excel/CSV files.
 
 ## Running the web console
 
@@ -104,7 +109,7 @@ The server listens on `127.0.0.1` only. Stop it with `Ctrl+C` in its terminal.
    Tick *Only files changed in this run* to filter the tabs down to the latest results.
 5. **Reopen earlier runs** from the **Run** dropdown at the top right.
 
-The header has three tabs, in this order: **Create agents**, **Run** (instruction and status) and **Outputs**. The page opens on **Run**.
+The header has four tabs, in this order: **Create agents**, **Upload files**, **Run** (instruction and status) and **Outputs**. The page opens on **Run**.
 
 ### Creating your own agents
 
@@ -141,6 +146,7 @@ CDR/IPDR files and everything derived from them contain phone numbers, IMEIs/IMS
 - `normalized/`, `analysis/` and `visuals/`, including the case-specific scripts the agents generate there
 - the generated Power BI project and data (only `theme.json` and `measures.dax` are tracked)
 - `webapp/runs/` (run logs contain findings)
+- `.inputs.json` (names and types of your record files)
 
 Before you push, check the diff with `git status` and `git diff --cached`. Never force-add ignored data (`git add -f`).
 

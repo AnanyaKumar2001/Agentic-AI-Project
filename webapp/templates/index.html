@@ -23,6 +23,9 @@
     <button type="button" class="main-tab" id="navAgents" role="tab" aria-selected="false" aria-controls="viewAgents" data-view="agents">
       <span aria-hidden="true">✨</span> Create agents <span class="main-tab-sub">Describe or upload</span>
     </button>
+    <button type="button" class="main-tab" id="navFiles" role="tab" aria-selected="false" aria-controls="viewFiles" data-view="files">
+      <span aria-hidden="true">📥</span> Upload files <span class="main-tab-sub">CDR, IPDR, cell IDs</span>
+    </button>
     <button type="button" class="main-tab active" id="navRun" role="tab" aria-selected="true" aria-controls="viewRun" data-view="run">
       <span aria-hidden="true">▶</span> Run <span class="main-tab-sub">Instruction &amp; status</span>
     </button>
@@ -104,6 +107,40 @@
       </div>
       <nav id="tabs" class="tabs" role="tablist"></nav>
       <div id="tabBody" class="tab-body"></div>
+    </section>
+  </div>
+
+  <div id="viewFiles" class="view" role="tabpanel" aria-labelledby="navFiles" hidden>
+    <section class="card accent-cyan">
+      <div class="section-head">
+        <h2>Upload record files</h2>
+        <span class="muted small">Saved to the project folder, where the agents read raw files · .xls, .xlsx, .csv</span>
+      </div>
+      <form id="inForm" class="agent-form">
+        <label id="inDrop" class="drop-zone drop-cyan" for="inFile">
+          <input id="inFile" type="file" accept=".xls,.xlsx,.csv" multiple>
+          <span class="dz-icon" aria-hidden="true">📥</span>
+          <span class="dz-title">Drop CDR, IPDR or cell-ID files here, or click to choose</span>
+          <span class="small muted">You can pick several files at once and set each file's type below.</span>
+        </label>
+        <div id="inQueue" class="in-queue" hidden></div>
+        <label class="toggle"><input type="checkbox" id="inOverwrite"> Replace files with the same name</label>
+        <div class="form-actions">
+          <button type="submit" id="inBtn" class="btn primary" disabled>⬆ Upload files</button>
+          <span id="inStatus" class="small muted" role="status"></span>
+        </div>
+      </form>
+    </section>
+
+    <section class="card accent-indigo">
+      <div class="section-head">
+        <h2>Record files in the project</h2>
+        <div class="status-actions">
+          <span class="muted small">Change a type if it was detected wrongly; the agents follow it.</span>
+          <button type="button" id="runNewBtn" class="btn primary" hidden>▶ Process new files</button>
+        </div>
+      </div>
+      <div id="inList" class="in-list"></div>
     </section>
   </div>
 

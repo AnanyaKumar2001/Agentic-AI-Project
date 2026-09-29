@@ -12,7 +12,7 @@ You normalize telecom record files into a standard schema so other analyses can 
 - Output to `./normalized/<source-file-stem>.csv` plus `./normalized/<source-file-stem>.meta.json`.
 
 ## Steps
-1. Detect record type (CDR vs IPDR) from columns.
+1. Detect record type (CDR, IPDR, or cell-ID / cell-site list) from columns. If the task states a file's type (e.g. uploaded as "Cell ID list"), use it, but mention it if the columns disagree.
 2. Find the true header row; extract banner metadata (operator, circle, target number, period, request reference) into the meta JSON.
 3. Map columns to the standard schema below; keep any unmapped columns with an `extra_` prefix rather than dropping them.
 4. Normalize:
@@ -27,6 +27,9 @@ You normalize telecom record files into a standard schema so other analyses can 
 ## Standard schema
 - CDR: `source_file, operator, target_msisdn, other_msisdn, call_type, start_time, duration_s, first_cell_id, last_cell_id, cell_address, latitude, longitude, imei, imsi, roaming_circle, is_intl`
 - IPDR: `source_file, operator, msisdn, imsi, imei, private_ip, private_port, public_ip, public_port, dest_ip, dest_port, protocol, start_time, end_time, duration_s, bytes_up, bytes_down, apn, cell_id, rat`
+- Cell-ID / cell-site list (tower reference data, not activity records): `source_file, operator, circle, cell_id, cgi, site_name, town, latitude, longitude, azimuth, site_address, ldca, sdca, district`
+  - Save as `./normalized/<source-file-stem>_cellsite.csv`. Build `cgi` as MCC-MNC-LAC-CellID when those parts exist. Latitude/longitude as decimal degrees; flag out-of-range coordinates and duplicate or conflicting cell IDs in the meta JSON.
+  - Other agents use these files to put CDR/IPDR cell IDs on the map (join on cell_id or cgi).
 
 ## Output
 Return a short report per file: detected type/operator, column mapping table (source → standard), rows in/out, duplicates removed, parse failures, and output paths.

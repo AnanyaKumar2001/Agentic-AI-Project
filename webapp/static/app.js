@@ -99,9 +99,7 @@
   async function init() {
     state.config = await (await fetch("/api/config")).json();
     renderChips();
-    $("#rawFiles").textContent = state.config.raw_files.length
-      ? "Raw files in workspace: " + state.config.raw_files.join(" · ")
-      : "No raw .xls/.xlsx/.csv files found in the workspace root.";
+    renderRawFiles();
     if (!state.config.claude_found) showError("Claude Code CLI ('claude') was not found on PATH — runs will fail.");
 
     $("#runForm").addEventListener("submit", (e) => { e.preventDefault(); startRun(); });
@@ -181,14 +179,16 @@
   }
 
   /* ------------------------------------------------------ section views --- */
-  const VIEWS = [["run", "#viewRun", "#navRun"], ["outputs", "#viewOutputs", "#navOutputs"], ["agents", "#viewAgents", "#navAgents"]];
-  const viewFromHash = () => ({ "#outputs": "outputs", "#agents": "agents" }[location.hash] || "run");
+  const VIEWS = [["run", "#viewRun", "#navRun"], ["outputs", "#viewOutputs", "#navOutputs"],
+    ["agents", "#viewAgents", "#navAgents"], ["files", "#viewFiles", "#navFiles"]];
+  const viewFromHash = () => ({ "#outputs": "outputs", "#agents": "agents", "#files": "files" }[location.hash] || "run");
 
   function setupViews() {
     document.querySelectorAll(".main-tab").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
     $("#viewOutputsBtn").addEventListener("click", () => { state.tab = "report"; renderTabs(); showView("outputs"); });
     window.addEventListener("hashchange", () => showView(viewFromHash(), false));
     setupAgentForms();
+    setupInputForms();
     showView(viewFromHash(), false);
   }
 
@@ -202,6 +202,7 @@
     }
     if (view === "outputs") { $("#outputsBadge").hidden = true; renderTabs(); renderTab(); }
     if (view === "agents") loadAgents();
+    if (view === "files") loadInputs();
     if (updateHash) history.replaceState(null, "", view === "run" ? location.pathname + location.search : "#" + view);
     window.scrollTo({ top: 0 });
   }
@@ -210,7 +211,134 @@
   // Re-read the agent list so new agents show up as chips and status cards on the Run tab.
   async function refreshConfig() {
     state.config = await (await fetch("/api/config")).json();
-    renderChips(); syncChips(); renderPipeline();
+    renderChips(); syncChips(); renderPipeline(); renderRawFiles();
+  }
+
+  /* ------------------------------------------------------ upload files --- */
+  const INPUT_TYPE_LABEL = { cdr: "CDR", ipdr: "IPDR", cellid: "Cell ID list", auto: "Auto-detect" };
+  const INPUT_ICON = { cdr: "📞", ipdr: "🌐", cellid: "📡", auto: "📄" };
+  const INPUT_EXTS = [".xls", ".xlsx", ".csv"];
+  const guessType = (name) => {
+    const n = name.toLowerCase();
+    if (n.includes("ipdr")) return "ipdr";
+    if (["cell", "site", "tower", "cgi", "bts"].some((k) => n.includes(k))) return "cellid";
+    if (n.includes("cdr")) return "cdr";
+    return "auto";
+  };
+  const typeSelect = (value, onchange) => h("select", { "aria-label": "File type", onchange: (e) => onchange(e.target.value) },
+    Object.entries(INPUT_TYPE_LABEL).map(([v, l]) => h("option", { value: v, selected: v === value }, l)));
+
+  function renderRawFiles() {
+    const files = state.config.inputs || [];
+    $("#rawFiles").textContent = files.length
+      ? "Record files: " + files.map((f) => `${f.name} (${INPUT_TYPE_LABEL[f.type] || "auto"}${f.normalized ? "" : ", new"})`).join(" · ")
+      : "No record files yet. Add CDR, IPDR or cell-ID files on the Upload files tab.";
+  }
+
+  function setupInputForms() {
+    state.inQueue = [];
+    const dz = $("#inDrop"), input = $("#inFile");
+    const add = (files) => {
+      for (const file of files) {
+        const ext = file.name.slice(file.name.lastIndexOf(".")).toLowerCase();
+        const item = { file, type: guessType(file.name), status: "queued", progress: 0, error: "" };
+        if (!INPUT_EXTS.includes(ext)) { item.status = "error"; item.error = "Only .xls, .xlsx and .csv files can be uploaded."; }
+        state.inQueue = state.inQueue.filter((q) => q.status === "done" || q.file.name !== file.name);
+        state.inQueue.push(item);
+      }
+      input.value = "";
+      renderQueue();
+    };
+    input.addEventListener("change", () => add(input.files));
+    ["dragenter", "dragover"].forEach((t) => dz.addEventListener(t, (e) => { e.preventDefault(); dz.classList.add("over"); }));
+    ["dragleave", "drop"].forEach((t) => dz.addEventListener(t, () => dz.classList.remove("over")));
+    dz.addEventListener("drop", (e) => { e.preventDefault(); add(e.dataTransfer.files); });
+    $("#inForm").addEventListener("submit", (e) => { e.preventDefault(); uploadQueue(); });
+    $("#runNewBtn").addEventListener("click", () => {
+      const pending = (state.inputs || []).filter((f) => !f.normalized).map((f) => `${f.name} (${INPUT_TYPE_LABEL[f.type]})`);
+      $("#prompt").value = `Process the new record files ${pending.join(", ")}: normalize them, analyze each with the right agent, then update the link analysis, visuals and Power BI dashboard.`;
+      state.selected.clear(); syncChips();
+      showView("run"); $("#prompt").focus();
+    });
+  }
+
+  function renderQueue() {
+    const box = $("#inQueue");
+    box.innerHTML = "";
+    box.hidden = !state.inQueue.length;
+    for (const q of state.inQueue) {
+      const end = q.status === "queued" ? h("button", { type: "button", class: "x", title: "Remove from the list", "aria-label": `Remove ${q.file.name}`,
+          onclick: () => { state.inQueue.splice(state.inQueue.indexOf(q), 1); renderQueue(); } }, "✕")
+        : q.status === "uploading" ? h("div", { class: "progress", role: "progressbar", "aria-valuenow": q.progress }, h("span", { style: `width:${q.progress}%` }))
+        : q.status === "done" ? h("span", { class: "tag ok" }, "✓ Uploaded")
+        : h("span", { class: "tag err" }, "Not uploaded");
+      box.append(h("div", { class: "in-row", "data-type": q.type },
+        h("span", { class: "f-ico", "aria-hidden": "true" }, INPUT_ICON[q.type]),
+        h("div", {}, h("div", { class: "f-name", title: q.file.name }, q.file.name), h("div", { class: "f-meta" }, fmtSize(q.file.size))),
+        q.status === "queued" ? typeSelect(q.type, (v) => { q.type = v; renderQueue(); }) : h("span", { class: "tag" }, INPUT_TYPE_LABEL[q.type]),
+        h("div", { class: "f-end" }, end),
+        q.error ? h("div", { class: "f-error", role: "alert" }, q.error) : null));
+    }
+    $("#inBtn").disabled = !state.inQueue.some((q) => q.status === "queued");
+  }
+
+  function uploadOne(q) {
+    return new Promise((resolve) => {
+      const fd = new FormData();
+      fd.append("file", q.file); fd.append("type", q.type);
+      fd.append("overwrite", $("#inOverwrite").checked ? "1" : "0");
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", "/api/inputs/upload");
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) { q.progress = Math.round(e.loaded / e.total * 100); renderQueue(); } };
+      xhr.onload = () => {
+        let data = {};
+        try { data = JSON.parse(xhr.responseText); } catch (e) { /* non-JSON error page */ }
+        if (xhr.status === 200) { q.status = "done"; q.error = data.renamed ? `Saved as ${data.name}` : ""; }
+        else { q.status = "error"; q.error = data.error || (xhr.status === 413 ? "File is too large." : `Upload failed (${xhr.status}).`); }
+        resolve();
+      };
+      xhr.onerror = () => { q.status = "error"; q.error = "The server could not be reached."; resolve(); };
+      xhr.send(fd);
+    });
+  }
+
+  async function uploadQueue() {
+    const todo = state.inQueue.filter((q) => q.status === "queued");
+    if (!todo.length) return;
+    $("#inBtn").disabled = true;
+    for (const [i, q] of todo.entries()) {
+      $("#inStatus").textContent = `Uploading ${i + 1} of ${todo.length}…`;
+      q.status = "uploading"; q.progress = 0; renderQueue();
+      await uploadOne(q);
+      renderQueue();
+    }
+    const ok = todo.filter((q) => q.status === "done").length;
+    $("#inStatus").textContent = `${ok} of ${todo.length} file${todo.length > 1 ? "s" : ""} uploaded.` + (ok ? " Use “Process new files” to run the agents on them." : "");
+    await Promise.all([loadInputs(), refreshConfig()]);
+  }
+
+  async function loadInputs() {
+    const data = await (await fetch("/api/inputs")).json();
+    state.inputs = data.files;
+    const list = $("#inList");
+    list.innerHTML = "";
+    for (const f of data.files) {
+      const row = h("div", { class: "in-row", "data-type": f.type },
+        h("span", { class: "f-ico", "aria-hidden": "true" }, INPUT_ICON[f.type] || "📄"),
+        h("div", {},
+          h("div", { class: "f-name", title: f.name }, f.name),
+          h("div", { class: "f-meta" }, `${fmtSize(f.size)} · ${f.uploaded ? `uploaded ${new Date(f.uploaded).toLocaleString()}` : "added outside the console"}`)),
+        typeSelect(f.type, async (v) => {
+          await fetch("/api/inputs/type", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: f.name, type: v }) });
+          loadInputs(); refreshConfig();
+        }),
+        h("div", { class: "f-end" }, f.normalized
+          ? h("span", { class: "tag ok", title: "A normalized copy exists in normalized/" }, "✓ Processed")
+          : h("span", { class: "tag pending", title: "Not normalized yet — run the agents" }, "New · not processed")));
+      list.append(row);
+    }
+    if (!data.files.length) list.append(h("div", { class: "empty" }, "No record files yet. Upload CDR, IPDR or cell-ID files above."));
+    $("#runNewBtn").hidden = !data.files.some((f) => !f.normalized);
   }
 
   function setupAgentForms() {

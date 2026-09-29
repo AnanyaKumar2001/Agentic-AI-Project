@@ -47,3 +47,7 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# Upload manifest (file names and types of the record files)
+.inputs.json
+.*.uploading
