@@ -19,6 +19,15 @@
     <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M6.6 10.8a15.1 15.1 0 0 0 6.6 6.6l2.2-2.2a1 1 0 0 1 1-.25 11.4 11.4 0 0 0 3.6.57 1 1 0 0 1 1 1V20a1 1 0 0 1-1 1A17 17 0 0 1 3 4a1 1 0 0 1 1-1h3.5a1 1 0 0 1 1 1c0 1.25.2 2.45.57 3.57a1 1 0 0 1-.25 1z"/></svg>
     <span>CDR &amp; IPDR Agent Console</span>
   </div>
+  <nav class="main-nav" role="tablist" aria-label="Sections">
+    <button type="button" class="main-tab active" id="navRun" role="tab" aria-selected="true" aria-controls="viewRun" data-view="run">
+      <span aria-hidden="true">▶</span> Run <span class="main-tab-sub">Instruction &amp; status</span>
+    </button>
+    <button type="button" class="main-tab" id="navOutputs" role="tab" aria-selected="false" aria-controls="viewOutputs" data-view="outputs">
+      <span aria-hidden="true">📁</span> Outputs <span class="main-tab-sub">Reports, visuals &amp; files</span>
+      <span id="outputsBadge" class="nav-badge" hidden>New</span>
+    </button>
+  </nav>
   <div class="topbar-right">
     <label class="history">Run
       <select id="runSelect"><option value="">— no runs yet —</option></select>
@@ -32,61 +41,68 @@
 </header>
 
 <main>
-  <!-- Command -->
-  <section class="card command accent-indigo">
-    <form id="runForm">
-      <label for="prompt" class="label">Instruction</label>
-      <div class="prompt-row">
-        <textarea id="prompt" rows="2" placeholder='e.g. "Run all agents"  ·  "Run the cdr-analyst and viz-generator agents"  ·  "Run link-analyzer and regenerate visuals"'></textarea>
-        <div class="prompt-actions">
-          <button type="submit" id="runBtn" class="btn primary">Run</button>
-          <button type="button" id="stopBtn" class="btn danger" hidden>Stop</button>
+  <div id="viewRun" class="view" role="tabpanel" aria-labelledby="navRun">
+    <!-- Command -->
+    <section class="card command accent-indigo">
+      <form id="runForm">
+        <label for="prompt" class="label">Instruction</label>
+        <div class="prompt-row">
+          <textarea id="prompt" rows="2" placeholder='e.g. "Run all agents"  ·  "Run the cdr-analyst and viz-generator agents"  ·  "Run link-analyzer and regenerate visuals"'></textarea>
+          <div class="prompt-actions">
+            <button type="submit" id="runBtn" class="btn primary">Run</button>
+            <button type="button" id="stopBtn" class="btn danger" hidden>Stop</button>
+          </div>
+        </div>
+        <div class="chips-row">
+          <button type="button" class="chip chip-all" data-all>Run all agents</button>
+          <span class="chips-sep">or pick agents:</span>
+          <div id="agentChips" class="chips"></div>
+          <label class="model">Model
+            <select id="model">
+              <option value="">Default</option>
+              <option value="sonnet">Sonnet</option>
+              <option value="opus">Opus</option>
+              <option value="haiku">Haiku</option>
+            </select>
+          </label>
+        </div>
+        <p id="rawFiles" class="muted small"></p>
+        <p id="formError" class="error small" hidden></p>
+      </form>
+    </section>
+
+    <!-- Status -->
+    <section class="card accent-teal">
+      <div class="section-head">
+        <h2>Run status</h2>
+        <div class="status-actions">
+          <span id="runMeta" class="muted small"></span>
+          <button type="button" id="viewOutputsBtn" class="btn sm primary" hidden>View outputs →</button>
         </div>
       </div>
-      <div class="chips-row">
-        <button type="button" class="chip chip-all" data-all>Run all agents</button>
-        <span class="chips-sep">or pick agents:</span>
-        <div id="agentChips" class="chips"></div>
-        <label class="model">Model
-          <select id="model">
-            <option value="">Default</option>
-            <option value="sonnet">Sonnet</option>
-            <option value="opus">Opus</option>
-            <option value="haiku">Haiku</option>
-          </select>
-        </label>
-      </div>
-      <p id="rawFiles" class="muted small"></p>
-      <p id="formError" class="error small" hidden></p>
-    </form>
-  </section>
+      <div id="pipeline" class="pipeline"></div>
+      <details id="feedWrap" class="feed-wrap" open>
+        <summary>Live activity <span id="feedCount" class="muted small"></span></summary>
+        <ol id="feed" class="feed"></ol>
+      </details>
+    </section>
+  </div>
 
-  <!-- Status -->
-  <section class="card accent-teal">
-    <div class="section-head">
-      <h2>Run status</h2>
-      <span id="runMeta" class="muted small"></span>
-    </div>
-    <div id="pipeline" class="pipeline"></div>
-    <details id="feedWrap" class="feed-wrap" open>
-      <summary>Live activity <span id="feedCount" class="muted small"></span></summary>
-      <ol id="feed" class="feed"></ol>
-    </details>
-  </section>
-
-  <!-- Outputs -->
-  <section class="card outputs accent-pink">
-    <div class="section-head">
-      <h2>Outputs</h2>
-      <div class="out-actions">
-        <label class="toggle"><input type="checkbox" id="onlyChanged"> Only files changed in this run</label>
-        <a id="dlRun" class="btn" hidden>Download this run's files (.zip)</a>
-        <a id="dlAll" class="btn primary" href="/api/zip?scope=all">Download all (.zip)</a>
+  <div id="viewOutputs" class="view" role="tabpanel" aria-labelledby="navOutputs" hidden>
+    <!-- Outputs -->
+    <section class="card outputs accent-pink">
+      <div class="section-head">
+        <h2>Outputs</h2>
+        <div class="out-actions">
+          <label class="toggle"><input type="checkbox" id="onlyChanged"> Only files changed in this run</label>
+          <a id="dlRun" class="btn" hidden>Download this run's files (.zip)</a>
+          <a id="dlAll" class="btn primary" href="/api/zip?scope=all">Download all (.zip)</a>
+        </div>
       </div>
-    </div>
-    <nav id="tabs" class="tabs" role="tablist"></nav>
-    <div id="tabBody" class="tab-body"></div>
-  </section>
+      <nav id="tabs" class="tabs" role="tablist"></nav>
+      <div id="tabBody" class="tab-body"></div>
+    </section>
+  </div>
 </main>
 
 <!-- Lightbox -->

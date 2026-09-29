@@ -77,6 +77,7 @@
     run: null,          // derived run view state
     es: null,
     files: {},
+    view: "run",        // top-level section: "run" or "outputs"
     tab: "report",
     open: {},           // tab -> selected file path
     onlyChanged: false,
@@ -107,6 +108,7 @@
     setupTheme();
 
     resetRunView(null);
+    setupViews();
     renderTabs();
     await loadFiles();
     const runs = await loadRunList();
@@ -164,6 +166,28 @@
     await loadRunList();
     openRun(data.id);
     state.tab = "report"; renderTabs();
+    showView("run");
+  }
+
+  /* ------------------------------------------------------ section views --- */
+  function setupViews() {
+    document.querySelectorAll(".main-tab").forEach((b) => b.addEventListener("click", () => showView(b.dataset.view)));
+    $("#viewOutputsBtn").addEventListener("click", () => { state.tab = "report"; renderTabs(); showView("outputs"); });
+    window.addEventListener("hashchange", () => showView(location.hash === "#outputs" ? "outputs" : "run", false));
+    showView(location.hash === "#outputs" ? "outputs" : "run", false);
+  }
+
+  function showView(view, updateHash = true) {
+    state.view = view;
+    for (const [v, id, nav] of [["run", "#viewRun", "#navRun"], ["outputs", "#viewOutputs", "#navOutputs"]]) {
+      const on = v === view;
+      $(id).hidden = !on;
+      $(nav).classList.toggle("active", on);
+      $(nav).setAttribute("aria-selected", on ? "true" : "false");
+    }
+    if (view === "outputs") { $("#outputsBadge").hidden = true; renderTabs(); renderTab(); }
+    if (updateHash) history.replaceState(null, "", view === "outputs" ? "#outputs" : location.pathname + location.search);
+    window.scrollTo({ top: 0 });
   }
 
   async function stopRun() {
@@ -203,6 +227,8 @@
         if (ev.prompt) r.prompt = ev.prompt;
         if (!["starting", "running"].includes(ev.status)) {
           r.ended = ev.t;
+          // Flag new outputs only for a run that just finished, not when replaying an old one.
+          if (ev.t > Date.now() / 1000 - 30 && state.view !== "outputs") $("#outputsBadge").hidden = false;
           for (const i of Object.values(r.instances)) if (i.status === "running") { i.status = ev.status === "completed" ? "done" : "failed"; i.t1 = ev.t; }
           loadFiles();
         }
@@ -294,6 +320,7 @@
     pill.className = "pill pill-" + r.status;
     $("#stopBtn").hidden = !running();
     $("#runBtn").disabled = running();
+    $("#viewOutputsBtn").hidden = !r.id || running() || r.status === "idle";
     $("#feedCount").textContent = r.feedCount ? `(${r.feedCount} events)` : "";
     const dl = $("#dlRun");
     dl.hidden = !(r.hasChanged && r.changed.size);
