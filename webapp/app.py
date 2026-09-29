@@ -60,10 +60,13 @@ Pipeline, in order:
 - If the user names specific agents, run only those, in pipeline order, reusing existing outputs of earlier stages.
 - If the user names specific files, restrict the work to them.
 - Give each subagent a complete, self-contained task: exact input file paths and where to write outputs.
+- Subagents return their written report in their final reply; the console saves that reply as the agent's report.
+  Do not ask subagents to write report.md (or other report files), and never treat a missing report file as a problem or mention it.
 
 Raw record files currently in the workspace root: {raw_files}
 
-When finished, reply with a concise markdown report: a table of the agents that ran with their status, the key findings (with numbers), and the main output paths."""
+When finished, reply with a concise markdown report: a table of the agents that ran with their status, the key findings (with numbers), and the main output paths.
+In the status column use ✅ for an agent that completed its task (with a short note of what it produced) and ❌ only for an agent that failed; reserve ⚠️ for real data or analysis problems, not for how reports were delivered."""
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 app.config["JSON_SORT_KEYS"] = False
@@ -164,7 +167,6 @@ class Run:
         self.proc = None
         self.stop_requested = False
         self.result = None
-        self.cost = None
         self.changed = []
         self.agent_names = {}       # tool_use_id -> subagent_type
         self.bg_tasks = {}          # tool_use_id -> description, for background Bash etc. (not agents)
@@ -177,7 +179,7 @@ class Run:
     def meta(self):
         return {
             "id": self.id, "prompt": self.prompt, "model": self.model, "status": self.status,
-            "started": self.started, "ended": self.ended, "cost": self.cost,
+            "started": self.started, "ended": self.ended,
             "result": self.result, "changed": self.changed,
         }
 
@@ -218,11 +220,13 @@ class PastRun:
             f = self.dir / "events.jsonl"
             self._events = [json.loads(l) for l in f.open(encoding="utf-8")] if f.exists() else []
             self._events = repair_events(self._events, self.dir / "raw.jsonl")
+            for ev in self._events:
+                ev.pop("cost", None)
         return self._events
 
     def meta(self):
         return {k: getattr(self, k, None) for k in
-                ("id", "prompt", "model", "status", "started", "ended", "cost", "result", "changed")}
+                ("id", "prompt", "model", "status", "started", "ended", "result", "changed")}
 
 
 def is_agent_task(e):
@@ -361,8 +365,7 @@ def handle_raw(run: Run, e: dict):
                          text=text, is_error=bool(b.get("is_error")))
     elif t == "result":
         run.result = e.get("result") or ""
-        run.cost = e.get("total_cost_usd")
-        run.emit("result", text=run.result, is_error=bool(e.get("is_error")), cost=run.cost,
+        run.emit("result", text=run.result, is_error=bool(e.get("is_error")),
                  duration_ms=e.get("duration_ms"), turns=e.get("num_turns"))
 
 
@@ -544,6 +547,59 @@ def stream(run_id):
 
     return Response(gen(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+def find_pdf_browser():
+    """A Chromium-based browser that can print HTML to PDF headlessly (Edge or Chrome)."""
+    env = os.environ.get("PDF_BROWSER")
+    if env and Path(env).is_file():
+        return env
+    for name in ("msedge", "chrome", "google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+        found = shutil.which(name)
+        if found:
+            return found
+    candidates = [
+        r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Microsoft\Edge\Application\msedge.exe",
+        r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+        r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe"),
+        "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    ]
+    return next((c for c in candidates if Path(c).is_file()), None)
+
+
+@app.post("/api/runs/<run_id>/report.pdf")
+def report_pdf(run_id):
+    """Print the report HTML built by the page to PDF with a headless browser."""
+    RUNS.get(run_id) or abort(404)
+    html = (request.get_json(force=True, silent=True) or {}).get("html", "")
+    if not html or len(html) > 10_000_000:
+        return jsonify({"error": "Report is empty or too large."}), 400
+    browser = find_pdf_browser()
+    if not browser:
+        return jsonify({"error": "No Chrome or Edge found for PDF export.", "fallback": "print"}), 501
+
+    tmp = Path(tempfile.mkdtemp(prefix="report_pdf_"))
+    try:
+        src, out = tmp / "report.html", tmp / "report.pdf"
+        src.write_text(html, encoding="utf-8")
+        cmd = [browser, "--headless=new", "--disable-gpu", "--no-first-run", "--disable-extensions",
+               f"--user-data-dir={tmp / 'profile'}", "--no-pdf-header-footer", "--print-to-pdf-no-header",
+               f"--print-to-pdf={out}", src.as_uri()]
+        flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
+        try:
+            subprocess.run(cmd, capture_output=True, timeout=90, creationflags=flags)
+        except subprocess.TimeoutExpired:
+            return jsonify({"error": "PDF export timed out.", "fallback": "print"}), 504
+        if not out.is_file() or out.stat().st_size == 0:
+            return jsonify({"error": "The browser did not produce a PDF.", "fallback": "print"}), 500
+        data = out.read_bytes()
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return send_file(io.BytesIO(data), mimetype="application/pdf", as_attachment=True,
+                     download_name=f"CDR_IPDR_report_{run_id}.pdf")
 
 
 @app.get("/api/files")

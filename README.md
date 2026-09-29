@@ -48,7 +48,8 @@ The agent definitions are in [`.claude/agents/`](.claude/agents). The two stage-
    Then run `claude` once in a terminal and sign in. Check with `claude --version`.
    Every run uses your Claude plan or API credits. A full "Run all agents" makes many model calls.
 3. **Git**, to clone the repository.
-4. *(Optional)* **Power BI Desktop** (Windows), to open the generated dashboard.
+4. *(Optional)* **Microsoft Edge or Google Chrome**, for one-click PDF export of reports (preinstalled on Windows).
+5. *(Optional)* **Power BI Desktop** (Windows), to open the generated dashboard.
 
 ## Installation
 
@@ -97,6 +98,9 @@ The server listens on `127.0.0.1` only. Stop it with `Ctrl+C` in its terminal.
    - **Analysis**, **Link Analysis**, **Normalized**: CSV tables you can filter, markdown, the tower map, the Mermaid link graph
    - **Power BI**, **Scripts**: project files and the generated Python scripts
 4. **Download** a single file, a whole tab (`.zip`), only the files this run changed, or everything (`.zip`).
+   In the **Report** tab, **⬇ Download report (PDF)** saves an A4 PDF with the run details, the summary, every agent's report and the list of changed files.
+   The PDF is printed by a headless **Microsoft Edge or Google Chrome** (found automatically; set `PDF_BROWSER` to a browser's path to choose one).
+   If neither is installed, your browser's print dialog opens instead; choose *Save as PDF*.
    Tick *Only files changed in this run* to filter the tabs down to the latest results.
 5. **Reopen earlier runs** from the **Run** dropdown at the top right.
 
@@ -138,6 +142,7 @@ Before you push, check the diff with `git status` and `git diff --cached`. Never
 | `Address already in use` on port 5050 | Another console is already running. Close it or use a different `PORT`. |
 | An agent card shows *Not run* | The instruction didn't ask for that agent. Only the agents you name run. |
 | ⚠ *Command failed* lines in the feed | A command inside an agent failed; the agent normally fixes it and retries. The agent is marked Failed only if the agent itself fails. |
+| *Download report (PDF)* opens a print dialog instead of downloading | No Edge or Chrome was found. Install one, or set `PDF_BROWSER` to its path and restart the console. You can also choose *Save as PDF* in the dialog. |
 | Charts or tabs are empty | The relevant agent hasn't run yet, or the run was stopped. Check the Report tab and the live feed. |
 
 ## License

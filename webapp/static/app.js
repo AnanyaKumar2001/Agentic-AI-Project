@@ -183,7 +183,7 @@
 
   function resetRunView(id) {
     state.run = {
-      id, status: id ? "starting" : "idle", prompt: "", started: null, ended: null, cost: null,
+      id, status: id ? "starting" : "idle", prompt: "", started: null, ended: null,
       result: null, resultError: false, changed: new Set(), hasChanged: false,
       instances: {},                  // tool_use_id -> {agent, desc, status, tools, last, t0, t1, report}
       orch: { tools: 0, last: "", t0: null },
@@ -246,8 +246,8 @@
         feed(ev, ev.agent, ev.text.length > 400 ? ev.text.slice(0, 400) + "…" : ev.text, "log");
         break;
       case "result":
-        r.result = ev.text; r.resultError = ev.is_error; r.cost = ev.cost;
-        feed(ev, "orchestrator", `Final report ready${ev.cost != null ? ` · cost $${ev.cost.toFixed(2)}` : ""}`, ev.is_error ? "err" : "ok");
+        r.result = ev.text; r.resultError = ev.is_error;
+        feed(ev, "orchestrator", "Final report ready", ev.is_error ? "err" : "ok");
         break;
       case "files_changed":
         r.changed = new Set(ev.files); r.hasChanged = true;
@@ -312,7 +312,6 @@
       r.prompt && `“${r.prompt}”`,
       `elapsed ${fmtDur(end - r.started)}`,
       total && `${done}/${total} agent tasks done`,
-      r.cost != null && `$${r.cost.toFixed(2)}`,
     ].filter(Boolean).join(" · ");
     if (running()) document.querySelectorAll("[data-elapsed]").forEach((el) => {
       const i = r.instances[el.dataset.elapsed];
@@ -429,6 +428,13 @@
   function renderReport(body) {
     const r = state.run;
     if (!r.id) { body.append(h("div", { class: "empty" }, "Enter an instruction above and press Run. The orchestrator's final report will appear here.")); return; }
+    const hasReport = r.result || Object.values(r.instances).some((i) => i.report);
+    if (hasReport && !running()) {
+      body.append(h("div", { class: "tab-toolbar" },
+        h("span", { class: "muted small" }, "Final report, agent reports and changed files for this run"),
+        h("button", { class: "btn sm primary", type: "button", disabled: state.pdfBusy, onclick: downloadReportPdf },
+          state.pdfBusy ? "Generating PDF…" : "⬇ Download report (PDF)")));
+    }
     if (r.result) body.append(h("div", { class: "md", html: md(r.result) }));
     else body.append(h("div", { class: "empty" }, running() ? "Agents are working — the final report will appear here when the run finishes. Output tabs update as files are written." : "This run did not produce a final report. Check the live activity log above."));
 
@@ -443,6 +449,106 @@
       }
     }
     if (r.hasChanged) body.append(changedFilesCard(r));
+  }
+
+  /* --------------------------------------------------------- report PDF --- */
+  const PDF_CSS = `
+    @page { size: A4; margin: 16mm 14mm; }
+    * { box-sizing: border-box; }
+    body { font: 10.5pt/1.5 "Segoe UI", Roboto, Helvetica, Arial, sans-serif; color: #0f172a; margin: 0; }
+    header { border-bottom: 3px solid #4f46e5; padding-bottom: 8px; margin-bottom: 14px; }
+    header h1 { font-size: 18pt; margin: 0 0 2px; color: #4f46e5; }
+    .meta { width: 100%; border-collapse: collapse; font-size: 9pt; margin-top: 6px; }
+    .meta td { padding: 2px 8px 2px 0; vertical-align: top; }
+    .meta td:first-child { color: #64748b; width: 110px; white-space: nowrap; }
+    h1, h2, h3, h4 { page-break-after: avoid; break-after: avoid; }
+    h2.section { font-size: 13pt; color: #fff; background: #4f46e5; padding: 4px 10px; border-radius: 4px; margin: 20px 0 10px; }
+    .md h1 { font-size: 15pt; color: #4f46e5; } .md h2 { font-size: 13pt; color: #4f46e5; } .md h3 { font-size: 11.5pt; }
+    table { border-collapse: collapse; margin: 8px 0; font-size: 9pt; width: 100%; }
+    th, td { border: 1px solid #cbd5e1; padding: 3px 6px; text-align: left; vertical-align: top; word-break: break-word; }
+    th { background: #eef2ff; }
+    tr, img, pre { page-break-inside: avoid; break-inside: avoid; }
+    code { font-family: Consolas, "Cascadia Code", monospace; font-size: 8.5pt; background: #f1f5f9; padding: 0 3px; border-radius: 3px; }
+    pre { background: #f8fafc; border: 1px solid #e2e8f0; padding: 8px; white-space: pre-wrap; word-break: break-word; }
+    pre code { background: none; padding: 0; }
+    .agent { border-left: 4px solid var(--c); padding: 2px 0 2px 12px; margin: 14px 0; }
+    .agent > h3 { color: var(--c); margin: 4px 0 2px; font-size: 12pt; }
+    .agent .desc { color: #64748b; font-size: 9pt; margin-bottom: 6px; }
+    .files { font-family: Consolas, monospace; font-size: 8.5pt; columns: 2; column-gap: 18px; }
+    .files div { break-inside: avoid; }
+    .files .folder { font-weight: 700; color: #4f46e5; margin-top: 6px; }
+    footer { margin-top: 24px; font-size: 8pt; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 6px; }`;
+  // Print-safe hues (deep enough for white paper).
+  const PDF_COLORS = { indigo: "#4f46e5", teal: "#0f766e", blue: "#2563eb", violet: "#7c3aed", orange: "#c2410c", pink: "#be185d", amber: "#b45309", green: "#15803d", cyan: "#0e7490", slate: "#475569" };
+  const fmtWhen = (t) => t ? new Date(t * 1000).toLocaleString() : "—";
+
+  function buildReportHtml() {
+    const r = state.run;
+    const reps = Object.values(r.instances).filter((i) => i.report);
+    const agentsRun = Object.values(r.instances);
+    const statusOf = (i) => ({ done: "completed", failed: "failed", running: "running" }[i.status] || i.status);
+    const meta = [
+      ["Instruction", esc(r.prompt || "—")],
+      ["Run ID", esc(r.id)],
+      ["Status", esc(r.status)],
+      ["Started", esc(fmtWhen(r.started))],
+      ["Duration", r.ended ? esc(fmtDur(r.ended - r.started)) : "—"],
+      ["Agent tasks", agentsRun.length ? agentsRun.map((i) => `${esc(i.agent)} (${esc(statusOf(i))})`).join(", ") : "—"],
+    ].filter(Boolean).map(([k, v]) => `<tr><td>${k}</td><td>${v}</td></tr>`).join("");
+
+    let out = `<header><h1>CDR &amp; IPDR Analysis Report</h1><table class="meta">${meta}</table></header>`;
+    out += `<h2 class="section">Summary</h2><div class="md">${r.result ? md(r.result) : "<p><em>This run did not produce a final report.</em></p>"}</div>`;
+    if (reps.length) {
+      out += `<h2 class="section">Agent reports</h2>`;
+      for (const i of reps) {
+        out += `<section class="agent" style="--c:${PDF_COLORS[agentStyle(i.agent).color] || "#475569"}">` +
+          `<h3>${esc(i.agent)}</h3><div class="desc">${esc(i.desc || "")} · ${esc(statusOf(i))}</div>` +
+          `<div class="md">${md(i.report)}</div></section>`;
+      }
+    }
+    if (r.hasChanged && r.changed.size) {
+      out += `<h2 class="section">Files created or updated (${r.changed.size})</h2><div class="files">`;
+      let last = null;
+      for (const p of [...r.changed].sort()) {
+        const folder = p.slice(0, p.lastIndexOf("/"));
+        if (folder !== last) { out += `<div class="folder">${esc(folder)}/</div>`; last = folder; }
+        out += `<div>${esc(p.slice(folder.length + 1))}</div>`;
+      }
+      out += `</div>`;
+    }
+    out += `<footer>Generated ${esc(new Date().toLocaleString())} by the CDR &amp; IPDR Agent Console. Contains personal data from telecom records — handle according to your legal authority and data-protection rules.</footer>`;
+    return `<!doctype html><html lang="en"><head><meta charset="utf-8"><title>CDR &amp; IPDR report ${esc(r.id)}</title><style>${PDF_CSS}</style></head><body>${out}</body></html>`;
+  }
+
+  async function downloadReportPdf() {
+    const r = state.run;
+    const html = buildReportHtml();
+    state.pdfBusy = true; renderTab();
+    try {
+      const res = await fetch(`/api/runs/${encodeURIComponent(r.id)}/report.pdf`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ html }),
+      });
+      if (res.ok) {
+        const url = URL.createObjectURL(await res.blob());
+        const a = h("a", { href: url, download: `CDR_IPDR_report_${r.id}.pdf` });
+        document.body.append(a); a.click(); a.remove();
+        setTimeout(() => URL.revokeObjectURL(url), 10000);
+      } else {
+        printFallback(html);
+      }
+    } catch (e) {
+      printFallback(html);
+    } finally {
+      state.pdfBusy = false; renderTab();
+    }
+  }
+
+  // No headless browser on the server: open the same page and let the user "Save as PDF" from the print dialog.
+  function printFallback(html) {
+    const w = window.open("", "_blank");
+    if (!w) { showError("PDF export failed and the print window was blocked. Allow pop-ups for this page and try again."); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+    setTimeout(() => { try { w.focus(); w.print(); } catch (e) { /* window closed */ } }, 500);
   }
 
   function changedFilesCard(r) {
