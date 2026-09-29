@@ -22,15 +22,53 @@
     ? DOMPurify.sanitize(marked.parse(text || ""))
     : `<pre>${esc(text)}</pre>`;
 
+  // Each tab shares the colour of the agent that produces its files.
   const TABS = [
-    { key: "report", title: "Report" },
-    { key: "visuals", title: "Visuals" },
-    { key: "analysis", title: "Analysis" },
-    { key: "links", title: "Link Analysis" },
-    { key: "normalized", title: "Normalized" },
-    { key: "powerbi", title: "Power BI" },
-    { key: "scripts", title: "Scripts" },
+    { key: "report", title: "Report", color: "indigo", icon: "📝" },
+    { key: "visuals", title: "Visuals", color: "pink", icon: "📊" },
+    { key: "analysis", title: "Analysis", color: "blue", icon: "🔍" },
+    { key: "links", title: "Link Analysis", color: "orange", icon: "🔗" },
+    { key: "normalized", title: "Normalized", color: "teal", icon: "🧹" },
+    { key: "powerbi", title: "Power BI", color: "amber", icon: "📈" },
+    { key: "scripts", title: "Scripts", color: "slate", icon: "🐍" },
   ];
+  const AGENT_STYLE = {
+    orchestrator: { color: "indigo", icon: "🧭" },
+    "record-normalizer": { color: "teal", icon: "🧹" },
+    "cdr-analyst": { color: "blue", icon: "📞" },
+    "ipdr-analyst": { color: "violet", icon: "🌐" },
+    "link-analyzer": { color: "orange", icon: "🔗" },
+    "viz-generator": { color: "pink", icon: "📊" },
+    "powerbi-dashboard": { color: "amber", icon: "📈" },
+    system: { color: "slate", icon: "⚙️" },
+  };
+  const agentStyle = (name) => AGENT_STYLE[name] || { color: "cyan", icon: "🤖" };
+  const cvar = (color) => `--c: var(--${color})`;
+  const agentVar = (name) => cvar(agentStyle(name).color);
+  // Folders get a colour from a rotating palette so gallery sections are easy to tell apart.
+  const FOLDER_COLORS = ["blue", "violet", "orange", "teal", "pink", "amber", "cyan", "green"];
+  const folderColors = new Map();
+  const folderVar = (folder) => {
+    if (!folderColors.has(folder)) folderColors.set(folder, FOLDER_COLORS[folderColors.size % FOLDER_COLORS.length]);
+    return cvar(folderColors.get(folder));
+  };
+  const KIND_COLOR = { csv: "green", image: "pink", markdown: "indigo", html: "orange", mermaid: "violet", text: "slate", binary: "amber" };
+  const kindBadge = (f) => h("span", { class: "kind", style: cvar(KIND_COLOR[f.kind] || "slate") }, (f.name.split(".").pop() || f.kind).slice(0, 5));
+
+  function setupTheme() {
+    const btn = $("#themeToggle");
+    const apply = (dark) => {
+      if (dark) document.documentElement.dataset.theme = "dark"; else delete document.documentElement.dataset.theme;
+      const label = dark ? "Switch to light theme" : "Switch to dark theme";
+      btn.setAttribute("aria-label", label); btn.title = label;
+    };
+    apply(document.documentElement.dataset.theme === "dark");
+    btn.addEventListener("click", () => {
+      const dark = document.documentElement.dataset.theme !== "dark";
+      apply(dark);
+      try { localStorage.setItem("theme", dark ? "dark" : "light"); } catch (e) { /* storage unavailable: theme lasts this visit */ }
+    });
+  }
 
   const state = {
     config: null,
@@ -66,6 +104,7 @@
     $("#runSelect").addEventListener("change", (e) => e.target.value && openRun(e.target.value));
     $("#onlyChanged").addEventListener("change", (e) => { state.onlyChanged = e.target.checked; renderTabs(); renderTab(); });
     setupLightbox();
+    setupTheme();
 
     resetRunView(null);
     renderTabs();
@@ -81,14 +120,14 @@
     box.innerHTML = "";
     for (const a of state.config.pipeline) {
       box.append(h("button", {
-        type: "button", class: "chip", "data-agent": a.name, title: a.blurb,
+        type: "button", class: "chip", "data-agent": a.name, title: a.blurb, style: agentVar(a.name),
         onclick: () => {
           state.selected.has(a.name) ? state.selected.delete(a.name) : state.selected.add(a.name);
           syncChips();
           const names = state.config.pipeline.map((p) => p.name).filter((n) => state.selected.has(n));
           $("#prompt").value = names.length ? `Run the ${names.join(", ")} agent${names.length > 1 ? "s" : ""}` : "";
         },
-      }, a.name));
+      }, agentStyle(a.name).icon, " ", a.name));
     }
   }
   function syncChips() {
@@ -227,7 +266,7 @@
   function feed(ev, who, what, cls) {
     const ol = $("#feed");
     const stick = ol.scrollTop + ol.clientHeight >= ol.scrollHeight - 20;
-    ol.append(h("li", { class: cls }, h("span", { class: "ts" }, clock(ev.t)), h("span", { class: "who", title: who }, who), h("span", { class: "what" }, what)));
+    ol.append(h("li", { class: cls }, h("span", { class: "ts" }, clock(ev.t)), h("span", { class: "who", title: who, style: agentVar(who) }, who), h("span", { class: "what" }, what)));
     state.run.feedCount++;
     while (ol.children.length > 1500) ol.firstChild.remove();
     if (stick) ol.scrollTop = ol.scrollHeight;
@@ -291,8 +330,8 @@
     for (const a of Object.keys(byAgent)) if (!stages.find((s) => s.name === a)) stages.push({ name: a, title: a, blurb: "Ad-hoc subagent" });
 
     const orchState = running() ? "running" : r.status === "completed" ? "done" : ["failed", "stopped", "interrupted"].includes(r.status) ? "failed" : "idle";
-    box.append(h("div", { class: `stage orch ${orchState}` },
-      h("div", { class: "row" }, h("span", { class: "name" }, "Orchestrator"), stateLabel(orchState, r.status)),
+    box.append(h("div", { class: `stage orch ${orchState}`, style: agentVar("orchestrator") },
+      h("div", { class: "row" }, stageName("orchestrator", "Orchestrator"), stateLabel(orchState, r.status)),
       h("div", { class: "blurb" }, "Interprets your instruction and dispatches the agents below"),
       h("div", { class: "last", title: r.orch.last }, r.orch.last || (r.id ? "" : "Waiting for an instruction")),
     ));
@@ -308,8 +347,8 @@
       const warns = inst.reduce((a, [, i]) => a + (i.warnings || 0), 0);
       const lastActive = inst.filter(([, i]) => i.status === "running").map(([, i]) => i.last).filter(Boolean).pop()
         || (inst.length ? inst[inst.length - 1][1].last : "");
-      box.append(h("div", { class: `stage ${st}` },
-        h("div", { class: "row" }, h("span", { class: "name" }, s.title), stateLabel(st)),
+      box.append(h("div", { class: `stage ${st}`, style: agentVar(s.name) },
+        h("div", { class: "row" }, stageName(s.name, s.title), stateLabel(st)),
         h("div", { class: "blurb" }, s.blurb),
         inst.length ? h("div", { class: "stats" }, `${inst.length} task${inst.length > 1 ? "s" : ""} · ${tools} tool calls` + (warns ? ` · ${warns} failed command${warns > 1 ? "s" : ""} (retried)` : "")) : null,
         h("div", { class: "last", title: lastActive }, st === "running" ? lastActive : ""),
@@ -319,6 +358,10 @@
             h("span", {}, i.desc)))) : null,
       ));
     }
+  }
+
+  function stageName(agent, title) {
+    return h("span", { class: "name" }, h("span", { class: "ico", "aria-hidden": "true" }, agentStyle(agent).icon), title);
   }
 
   function stateLabel(st, runStatus) {
@@ -351,15 +394,17 @@
     for (const t of TABS) {
       const n = t.key === "report" ? null : filesFor(t.key).length;
       nav.append(h("button", {
-        class: "tab" + (state.tab === t.key ? " active" : ""), role: "tab",
+        class: "tab" + (state.tab === t.key ? " active" : ""), role: "tab", style: cvar(t.color),
+        "aria-selected": state.tab === t.key ? "true" : "false",
         onclick: () => { state.tab = t.key; renderTabs(); renderTab(); },
-      }, t.title, n != null ? h("span", { class: "count" }, n) : null));
+      }, h("span", { "aria-hidden": "true" }, t.icon), t.title, n != null ? h("span", { class: "count" }, n) : null));
     }
   }
 
   function renderTab() {
     const body = $("#tabBody");
     body.innerHTML = "";
+    body.style.cssText = cvar(TABS.find((t) => t.key === state.tab).color);
     if (state.tab === "report") return renderReport(body);
     if (state.tab === "visuals") return renderVisuals(body);
     return renderBrowser(body, state.tab);
@@ -391,8 +436,9 @@
     if (reps.length) {
       body.append(h("h2", { style: "margin:18px 0 4px" }, "Agent reports"));
       for (const i of reps) {
-        body.append(h("details", { class: "report-agent" },
-          h("summary", {}, h("span", { class: `dot ${i.status}` }), `${i.agent} — ${i.desc}`),
+        body.append(h("details", { class: "report-agent", style: agentVar(i.agent) },
+          h("summary", {}, h("span", { class: `dot ${i.status}` }), agentStyle(i.agent).icon,
+            h("span", { class: "who" }, i.agent), h("span", { class: "muted" }, "— " + i.desc)),
           h("div", { class: "md", html: md(i.report) })));
       }
     }
@@ -411,9 +457,10 @@
       for (const p of paths) {
         if (q && !p.toLowerCase().includes(q)) continue;
         const folder = p.slice(0, p.lastIndexOf("/"));
-        if (folder !== lastFolder) { list.append(h("div", { class: "cf-folder" }, folder + "/")); lastFolder = folder; }
+        if (folder !== lastFolder) { list.append(h("div", { class: "cf-folder", style: folderVar(folder) }, folder + "/")); lastFolder = folder; }
         const f = info.get(p);
         list.append(h("div", { class: "cf-row" },
+          kindBadge(f || { name: p, kind: "binary" }),
           h("span", { class: "cf-name", title: p }, p.slice(folder.length + 1)),
           h("span", { class: "cf-size" }, f ? fmtSize(f.size) : ""),
           h("a", { class: "btn sm", href: fileUrl(p, true), title: "Download " + p }, "Download")));
@@ -443,12 +490,12 @@
     state.lightbox.list = imgs;
     let idx = 0;
     for (const [folder, list] of byFolder(imgs)) {
-      body.append(h("div", { class: "folder-title" }, folder + "/"));
+      body.append(h("div", { class: "folder-title", style: folderVar(folder) }, folder + "/"));
       const grid = h("div", { class: "gallery" });
       for (const f of list) {
         const my = idx++;
         const svg = svgFor(f);
-        grid.append(h("div", { class: "viz" },
+        grid.append(h("div", { class: "viz", style: folderVar(folder) },
           h("div", { class: "thumb", onclick: () => openLightbox(my) },
             h("img", { src: fileUrl(f.path) + "?v=" + Math.round(f.mtime), loading: "lazy", alt: f.caption || f.name })),
           h("div", { class: "meta" },
@@ -509,7 +556,7 @@
         fl.append(h("div", {
           class: "file-item" + (f.path === state.open[tab] ? " active" : ""), title: f.path,
           onclick: () => { state.open[tab] = f.path; renderTab(); },
-        }, h("span", { class: "fn" }, f.name, isNew(f.path) ? h("span", { class: "badge-new" }, "NEW") : null), h("span", { class: "sz" }, fmtSize(f.size))));
+        }, h("span", { class: "fn" }, kindBadge(f), h("span", {}, f.name), isNew(f.path) ? h("span", { class: "badge-new" }, "NEW") : null), h("span", { class: "sz" }, fmtSize(f.size))));
       }
     }
     const f = list.find((x) => x.path === state.open[tab]);
